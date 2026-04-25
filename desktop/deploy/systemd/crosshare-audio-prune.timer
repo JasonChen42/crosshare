@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CrossHare audio retention cleanup every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=crosshare-audio-prune.service
+
+[Install]
+WantedBy=timers.target

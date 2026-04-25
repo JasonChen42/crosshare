@@ -1,0 +1,34 @@
+# Local editor/agent state
+.codex
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and crash dumps
+*.log
+*.hprof
+hs_err_pid*
+java_pid*.hprof
+
+# Local machine config
+local.properties
+
+# Go build output
+/desktop/crosshare
+/desktop/crosshare.exe
+/desktop/crosshare-*
+/desktop/*.test
+/desktop/coverage.out
+
+# Android / Gradle build output
+/.gradle/
+/android/.gradle/
+/android/build/
+/android/app/build/
+
+# Generated packages
+*.apk
+*.aab

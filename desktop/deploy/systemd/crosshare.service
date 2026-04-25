@@ -1,0 +1,13 @@
+[Unit]
+Description=CrossHare photo and video sync service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/crosshare --no-tray
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
