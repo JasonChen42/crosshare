@@ -38,6 +38,10 @@ type Status struct {
 	LastCompletedFile string `json:"last_completed_file,omitempty"`
 	LastCompletedPath string `json:"last_completed_path,omitempty"`
 	LastCompletedAt   string `json:"last_completed_at,omitempty"`
+	TranscriptPartial string `json:"transcript_partial,omitempty"`
+	TranscriptFinal   string `json:"transcript_final,omitempty"`
+	LastTranscript    string `json:"last_transcript,omitempty"`
+	TranscriptError   string `json:"transcript_error,omitempty"`
 	LastError         string `json:"last_error,omitempty"`
 }
 
@@ -45,10 +49,28 @@ type ReceiveResult struct {
 	FilePath     string
 	FileName     string
 	BytesWritten int64
+	Transcript   string
+}
+
+type TranscriptUpdate struct {
+	Partial string
+	Final   string
+	Error   string
+}
+
+type RealtimeTranscriber interface {
+	Start(meta StreamMeta, onUpdate func(TranscriptUpdate)) (RealtimeTranscriptStream, error)
+}
+
+type RealtimeTranscriptStream interface {
+	WritePCM(p []byte) error
+	Commit() error
+	Close() error
 }
 
 type Receiver struct {
-	targetRoot string
+	targetRoot  string
+	transcriber RealtimeTranscriber
 
 	mu     sync.RWMutex
 	status Status
@@ -56,6 +78,12 @@ type Receiver struct {
 
 func NewReceiver(targetRoot string) *Receiver {
 	return &Receiver{targetRoot: targetRoot}
+}
+
+func (r *Receiver) SetTranscriber(transcriber RealtimeTranscriber) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.transcriber = transcriber
 }
 
 func (r *Receiver) Status() Status {
@@ -154,6 +182,15 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 		return nil, fmt.Errorf("failed to write wav header: %w", err)
 	}
 
+	transcriptStream := r.startTranscriptStream(meta)
+	if transcriptStream != nil {
+		defer func() {
+			if transcriptStream != nil {
+				_ = transcriptStream.Close()
+			}
+		}()
+	}
+
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := body.Read(buf)
@@ -165,6 +202,13 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 				r.finishWithError(writeErr)
 				return nil, fmt.Errorf("failed to write audio data: %w", writeErr)
 			}
+			if transcriptStream != nil {
+				if err := transcriptStream.WritePCM(buf[:n]); err != nil {
+					r.updateTranscript(TranscriptUpdate{Error: err.Error()})
+					_ = transcriptStream.Close()
+					transcriptStream = nil
+				}
+			}
 		}
 
 		if readErr == io.EOF {
@@ -173,6 +217,12 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 		if readErr != nil {
 			r.finishWithError(readErr)
 			return nil, fmt.Errorf("failed to read audio stream: %w", readErr)
+		}
+	}
+
+	if transcriptStream != nil {
+		if err := transcriptStream.Commit(); err != nil {
+			r.updateTranscript(TranscriptUpdate{Error: err.Error()})
 		}
 	}
 
@@ -193,12 +243,30 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 
 	success = true
 	r.finishSuccess(fileName, finalPath)
+	status := r.Status()
 
 	return &ReceiveResult{
 		FilePath:     finalPath,
 		FileName:     fileName,
 		BytesWritten: bytesWritten,
+		Transcript:   status.LastTranscript,
 	}, nil
+}
+
+func (r *Receiver) startTranscriptStream(meta StreamMeta) RealtimeTranscriptStream {
+	r.mu.RLock()
+	transcriber := r.transcriber
+	r.mu.RUnlock()
+	if transcriber == nil {
+		return nil
+	}
+
+	stream, err := transcriber.Start(meta, r.updateTranscript)
+	if err != nil {
+		r.updateTranscript(TranscriptUpdate{Error: err.Error()})
+		return nil
+	}
+	return stream
 }
 
 func (r *Receiver) begin(next Status) error {
@@ -210,6 +278,10 @@ func (r *Receiver) begin(next Status) error {
 	next.LastCompletedFile = r.status.LastCompletedFile
 	next.LastCompletedPath = r.status.LastCompletedPath
 	next.LastCompletedAt = r.status.LastCompletedAt
+	next.LastTranscript = r.status.LastTranscript
+	next.TranscriptPartial = ""
+	next.TranscriptFinal = ""
+	next.TranscriptError = ""
 	next.LastError = ""
 	r.status = next
 	return nil
@@ -224,6 +296,22 @@ func (r *Receiver) updateBytes(bytesWritten int64) {
 	r.status.BytesReceived = bytesWritten
 }
 
+func (r *Receiver) updateTranscript(update TranscriptUpdate) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if update.Partial != "" {
+		r.status.TranscriptPartial = update.Partial
+	}
+	if update.Final != "" {
+		r.status.TranscriptFinal = update.Final
+		r.status.LastTranscript = update.Final
+		r.status.TranscriptPartial = ""
+	}
+	if update.Error != "" {
+		r.status.TranscriptError = update.Error
+	}
+}
+
 func (r *Receiver) finishSuccess(fileName, filePath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -234,6 +322,9 @@ func (r *Receiver) finishSuccess(fileName, filePath string) {
 	r.status.LastCompletedFile = fileName
 	r.status.LastCompletedPath = filePath
 	r.status.LastCompletedAt = time.Now().Format(time.RFC3339)
+	if r.status.TranscriptFinal != "" {
+		r.status.LastTranscript = r.status.TranscriptFinal
+	}
 	r.status.LastError = ""
 }
 

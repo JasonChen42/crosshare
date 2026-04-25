@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	fyne.io/systray v1.12.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	modernc.org/sqlite v1.48.0

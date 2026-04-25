@@ -21,6 +21,7 @@ import (
 	"github.com/crosshare/desktop/internal/organizer"
 	"github.com/crosshare/desktop/internal/storage"
 	csync "github.com/crosshare/desktop/internal/sync"
+	"github.com/crosshare/desktop/internal/transcript"
 )
 
 // Server is the HTTP server that handles API requests from phones.
@@ -34,11 +35,17 @@ type Server struct {
 
 // New creates a new HTTP server.
 func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
+	audioReceiver := audio.NewReceiver(cfg.GetTargetFolder())
+	if transcriptURL := transcriptURLFromEnv(); transcriptURL != "" {
+		log.Printf("[server] realtime audio transcript websocket: %s", transcriptURL)
+		audioReceiver.SetTranscriber(transcript.NewClient(transcriptURL))
+	}
+
 	s := &Server{
 		cfg:           cfg,
 		db:            db,
 		syncMgr:       syncMgr,
-		audioReceiver: audio.NewReceiver(cfg.GetTargetFolder()),
+		audioReceiver: audioReceiver,
 	}
 
 	mux := http.NewServeMux()
@@ -67,6 +74,19 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 	}
 
 	return s
+}
+
+func transcriptURLFromEnv() string {
+	value := strings.TrimSpace(os.Getenv("CROSSHARE_TRANSCRIPT_WS"))
+	if value == "" {
+		return transcript.DefaultURL
+	}
+	switch strings.ToLower(value) {
+	case "0", "false", "off", "disabled", "none":
+		return ""
+	default:
+		return value
+	}
 }
 
 // Start starts the HTTP server.
@@ -267,10 +287,11 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[server] received audio stream from %s -> %s (%d bytes)", device.DeviceName, result.FileName, result.BytesWritten)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"uploaded": true,
-		"bytes":    result.BytesWritten,
-		"file":     result.FileName,
-		"path":     result.FilePath,
+		"uploaded":   true,
+		"bytes":      result.BytesWritten,
+		"file":       result.FileName,
+		"path":       result.FilePath,
+		"transcript": result.Transcript,
 	})
 }
 

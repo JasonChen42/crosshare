@@ -3,6 +3,7 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -55,4 +56,78 @@ func TestReceiveWritesWaveFile(t *testing.T) {
 	if filepath.Base(result.FilePath) != status.LastCompletedFile {
 		t.Fatalf("LastCompletedFile = %q, want %q", status.LastCompletedFile, filepath.Base(result.FilePath))
 	}
+}
+
+func TestReceiveCopiesPCMToRealtimeTranscriber(t *testing.T) {
+	root := t.TempDir()
+	transcriber := &fakeTranscriber{}
+	receiver := NewReceiver(root)
+	receiver.SetTranscriber(transcriber)
+
+	stream := []byte{0x01, 0x00, 0x02, 0x00}
+	result, err := receiver.Receive(StreamMeta{
+		DeviceID:      "device-1",
+		DeviceName:    "OnePlus 12",
+		SessionID:     "session-2",
+		SampleRate:    16000,
+		Channels:      1,
+		BitsPerSample: 16,
+	}, bytes.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	if got := string(transcriber.stream.data); got != string(stream) {
+		t.Fatalf("transcriber received %v, want %v", transcriber.stream.data, stream)
+	}
+	if !transcriber.stream.committed {
+		t.Fatalf("transcriber stream was not committed")
+	}
+	if !transcriber.stream.closed {
+		t.Fatalf("transcriber stream was not closed")
+	}
+	if result.Transcript != "hello world" {
+		t.Fatalf("Transcript = %q, want hello world", result.Transcript)
+	}
+
+	status := receiver.Status()
+	if status.LastTranscript != "hello world" {
+		t.Fatalf("LastTranscript = %q, want hello world", status.LastTranscript)
+	}
+}
+
+type fakeTranscriber struct {
+	stream *fakeTranscriptStream
+}
+
+func (f *fakeTranscriber) Start(_ StreamMeta, onUpdate func(TranscriptUpdate)) (RealtimeTranscriptStream, error) {
+	f.stream = &fakeTranscriptStream{onUpdate: onUpdate}
+	onUpdate(TranscriptUpdate{Partial: "hello"})
+	return f.stream, nil
+}
+
+type fakeTranscriptStream struct {
+	onUpdate  func(TranscriptUpdate)
+	data      []byte
+	committed bool
+	closed    bool
+}
+
+func (f *fakeTranscriptStream) WritePCM(p []byte) error {
+	f.data = append(f.data, p...)
+	return nil
+}
+
+func (f *fakeTranscriptStream) Commit() error {
+	f.committed = true
+	f.onUpdate(TranscriptUpdate{Final: "hello world"})
+	return nil
+}
+
+func (f *fakeTranscriptStream) Close() error {
+	if f.closed {
+		return io.ErrClosedPipe
+	}
+	f.closed = true
+	return nil
 }

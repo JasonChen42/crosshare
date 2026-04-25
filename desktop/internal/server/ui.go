@@ -474,14 +474,22 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
             audio.current_file || "",
             formatBytes(audio.bytes_received || 0),
             audio.sample_rate ? (audio.sample_rate + " Hz") : "",
-            audio.channels ? (audio.channels + " ch") : ""
+            audio.channels ? (audio.channels + " ch") : "",
+            audio.transcript_partial ? ("识别中: " + audio.transcript_partial) : ""
           ].filter(Boolean).join(" · ");
+        } else if (audio.transcript_error) {
+          audioText.textContent = "实时转写异常";
+          audioMeta.textContent = audio.transcript_error;
         } else if (audio.last_error) {
           audioText.textContent = audio.last_error;
           audioMeta.textContent = "";
         } else if (audio.last_completed_file) {
           audioText.textContent = "最近一次录音已保存";
-          audioMeta.textContent = [audio.last_completed_file, audio.last_completed_at].filter(Boolean).join(" · ");
+          audioMeta.textContent = [
+            audio.last_completed_file,
+            audio.transcript_final ? ("转写: " + audio.transcript_final) : "",
+            audio.last_completed_at
+          ].filter(Boolean).join(" · ");
         } else {
           audioText.textContent = "等待手机开始麦克风传输";
           audioMeta.textContent = "";
