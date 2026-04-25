@@ -8,13 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.AutomaticGainControl
-import android.media.audiofx.NoiseSuppressor
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -125,10 +121,6 @@ class AudioStreamService : Service() {
 
     private var streamingJobActive = false
     private var audioRecord: AudioRecord? = null
-    private var acousticEchoCanceler: AcousticEchoCanceler? = null
-    private var noiseSuppressor: NoiseSuppressor? = null
-    private var automaticGainControl: AutomaticGainControl? = null
-    private var previousAudioMode: Int? = null
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -247,7 +239,6 @@ class AudioStreamService : Service() {
     ): ListenerResult {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         val displayName = computerName ?: "电脑"
-        configureAudioMode()
 
         val minBufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
@@ -259,7 +250,7 @@ class AudioStreamService : Service() {
         }
 
         val recorder = AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -275,7 +266,6 @@ class AudioStreamService : Service() {
             throw IllegalStateException("麦克风初始化失败")
         }
         audioRecord = recorder
-        enableAudioEffects(recorder.audioSessionId)
 
         recorder.startRecording()
         if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -427,7 +417,6 @@ class AudioStreamService : Service() {
     }
 
     private fun releaseRecorder() {
-        releaseAudioEffects()
         try {
             audioRecord?.stop()
         } catch (_: Throwable) {
@@ -437,7 +426,6 @@ class AudioStreamService : Service() {
         } catch (_: Throwable) {
         }
         audioRecord = null
-        restoreAudioMode()
     }
 
     private fun createNotificationChannel() {
@@ -518,74 +506,6 @@ class AudioStreamService : Service() {
             buffer.removeFirst()
         }
         buffer.addLast(frame)
-    }
-
-    private fun configureAudioMode() {
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-        if (previousAudioMode == null) {
-            previousAudioMode = audioManager.mode
-        }
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-    }
-
-    private fun restoreAudioMode() {
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-        val mode = previousAudioMode ?: return
-        audioManager.mode = mode
-        previousAudioMode = null
-    }
-
-    private fun enableAudioEffects(audioSessionId: Int) {
-        releaseAudioEffects()
-
-        if (audioSessionId == AudioManager.ERROR) {
-            return
-        }
-
-        if (AcousticEchoCanceler.isAvailable()) {
-            acousticEchoCanceler = AcousticEchoCanceler.create(audioSessionId)?.apply {
-                enabled = true
-            }
-            Log.i(TAG, "AEC enabled=${acousticEchoCanceler?.enabled == true}")
-        } else {
-            Log.w(TAG, "AEC not available on this device")
-        }
-
-        if (NoiseSuppressor.isAvailable()) {
-            noiseSuppressor = NoiseSuppressor.create(audioSessionId)?.apply {
-                enabled = true
-            }
-            Log.i(TAG, "NS enabled=${noiseSuppressor?.enabled == true}")
-        } else {
-            Log.w(TAG, "NoiseSuppressor not available on this device")
-        }
-
-        if (AutomaticGainControl.isAvailable()) {
-            automaticGainControl = AutomaticGainControl.create(audioSessionId)?.apply {
-                enabled = true
-            }
-            Log.i(TAG, "AGC enabled=${automaticGainControl?.enabled == true}")
-        }
-    }
-
-    private fun releaseAudioEffects() {
-        try {
-            acousticEchoCanceler?.release()
-        } catch (_: Throwable) {
-        }
-        acousticEchoCanceler = null
-
-        try {
-            noiseSuppressor?.release()
-        } catch (_: Throwable) {
-        }
-        noiseSuppressor = null
-
-        try {
-            automaticGainControl?.release()
-        } catch (_: Throwable) {
-        }
-        automaticGainControl = null
     }
 
     private fun detectorConfigFor(key: String?): DetectorConfig {

@@ -38,7 +38,10 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 	audioReceiver := audio.NewReceiver(cfg.GetTargetFolder())
 	if transcriptURL := transcriptURLFromEnv(); transcriptURL != "" {
 		log.Printf("[server] realtime audio transcript websocket: %s", transcriptURL)
-		audioReceiver.SetTranscriber(transcript.NewClient(transcriptURL))
+		client := transcript.NewClient(transcriptURL)
+		client.Language = transcriptLanguageFromEnv()
+		log.Printf("[server] realtime audio transcript language: %s", client.Language)
+		audioReceiver.SetTranscriber(client)
 	}
 
 	s := &Server{
@@ -87,6 +90,14 @@ func transcriptURLFromEnv() string {
 	default:
 		return value
 	}
+}
+
+func transcriptLanguageFromEnv() string {
+	value := strings.TrimSpace(os.Getenv("CROSSHARE_TRANSCRIPT_LANGUAGE"))
+	if value == "" {
+		return "auto"
+	}
+	return value
 }
 
 // Start starts the HTTP server.

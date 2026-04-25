@@ -16,6 +16,7 @@ const DefaultURL = "ws://127.0.0.1:8000/v1/audio/realtime"
 
 type Client struct {
 	URL          string
+	Language     string
 	DialTimeout  time.Duration
 	EventTimeout time.Duration
 	WriteTimeout time.Duration
@@ -27,6 +28,7 @@ func NewClient(rawURL string) *Client {
 	}
 	return &Client{
 		URL:          rawURL,
+		Language:     "auto",
 		DialTimeout:  3 * time.Second,
 		EventTimeout: 2 * time.Second,
 		WriteTimeout: 2 * time.Second,
@@ -52,10 +54,15 @@ func (c *Client) Start(meta audio.StreamMeta, onUpdate func(audio.TranscriptUpda
 		onUpdate:     onUpdate,
 		eventTimeout: c.EventTimeout,
 		writeTimeout: c.WriteTimeout,
+		frameBytes:   meta.SampleRate * meta.Channels * (meta.BitsPerSample / 8) / 10,
 		done:         make(chan struct{}),
 		final:        make(chan struct{}),
 	}
 
+	language := c.Language
+	if language == "" {
+		language = "auto"
+	}
 	if err := stream.expectStartupEvent("session.started"); err != nil {
 		_ = stream.Close()
 		return nil, err
@@ -63,7 +70,7 @@ func (c *Client) Start(meta audio.StreamMeta, onUpdate func(audio.TranscriptUpda
 	if err := stream.sendJSON(map[string]interface{}{
 		"type": "session.update",
 		"session": map[string]interface{}{
-			"language":            "auto",
+			"language":            language,
 			"audio_format":        "pcm16le",
 			"sample_rate_hz":      meta.SampleRate,
 			"channels":            meta.Channels,
@@ -94,10 +101,12 @@ type Stream struct {
 	onUpdate     func(audio.TranscriptUpdate)
 	eventTimeout time.Duration
 	writeTimeout time.Duration
+	frameBytes   int
 
 	writeMu sync.Mutex
 	closeMu sync.Mutex
 	closed  bool
+	pending []byte
 
 	done      chan struct{}
 	final     chan struct{}
@@ -109,10 +118,23 @@ func (s *Stream) WritePCM(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	return s.write(websocket.BinaryMessage, p)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.pending = append(s.pending, p...)
+	for len(s.pending) >= s.frameBytes {
+		if err := s.writeLocked(websocket.BinaryMessage, s.pending[:s.frameBytes]); err != nil {
+			return err
+		}
+		s.pending = s.pending[s.frameBytes:]
+	}
+	return nil
 }
 
 func (s *Stream) Commit() error {
+	if err := s.flushPending(); err != nil {
+		return err
+	}
 	if err := s.sendJSON(map[string]string{"type": "input_audio_buffer.commit"}); err != nil {
 		return fmt.Errorf("send transcript commit: %w", err)
 	}
@@ -178,6 +200,10 @@ func (s *Stream) sendJSON(value interface{}) error {
 func (s *Stream) write(messageType int, data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	return s.writeLocked(messageType, data)
+}
+
+func (s *Stream) writeLocked(messageType int, data []byte) error {
 	s.closeMu.Lock()
 	closed := s.closed
 	s.closeMu.Unlock()
@@ -188,6 +214,17 @@ func (s *Stream) write(messageType int, data []byte) error {
 		return err
 	}
 	return s.conn.WriteMessage(messageType, data)
+}
+
+func (s *Stream) flushPending() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if len(s.pending) == 0 {
+		return nil
+	}
+	err := s.writeLocked(websocket.BinaryMessage, s.pending)
+	s.pending = nil
+	return err
 }
 
 func (s *Stream) readEvents() {

@@ -14,6 +14,7 @@ import (
 
 func TestClientStreamsPCMAndReceivesTranscript(t *testing.T) {
 	var received []byte
+	var binaryFrames int
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -65,6 +66,7 @@ func TestClientStreamsPCMAndReceivesTranscript(t *testing.T) {
 			}
 			switch messageType {
 			case websocket.BinaryMessage:
+				binaryFrames += 1
 				received = append(received, data...)
 				if err := conn.WriteJSON(map[string]string{"type": "transcript.partial", "text": "hello"}); err != nil {
 					t.Errorf("WriteJSON(partial) error = %v", err)
@@ -108,7 +110,9 @@ func TestClientStreamsPCMAndReceivesTranscript(t *testing.T) {
 	}
 	defer stream.Close()
 
-	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	pcm := make([]byte, 5000)
+	pcm[0] = 0x01
+	pcm[3200] = 0x02
 	if err := stream.WritePCM(pcm); err != nil {
 		t.Fatalf("WritePCM() error = %v", err)
 	}
@@ -118,6 +122,9 @@ func TestClientStreamsPCMAndReceivesTranscript(t *testing.T) {
 
 	if string(received) != string(pcm) {
 		t.Fatalf("received pcm = %v, want %v", received, pcm)
+	}
+	if binaryFrames != 2 {
+		t.Fatalf("binaryFrames = %d, want 2", binaryFrames)
 	}
 	if len(updates) == 0 || updates[len(updates)-1].Final != "hello world" {
 		t.Fatalf("updates = %+v, want final transcript", updates)
