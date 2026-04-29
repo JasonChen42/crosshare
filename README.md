@@ -1,35 +1,35 @@
 # CrossHare
 
-局域网照片/视频自动同步工具 — 手机连接到同一 WiFi 后，电脑自动发现手机并拉取照片/视频，按日期归档到指定文件夹。
+局域网照片、视频和手机麦克风音频同步工具。手机和电脑连接到同一可信 WiFi 后，Android 端配对电脑并主动上传媒体文件或语音片段，桌面端按日期归档到指定文件夹。
+
+> 当前项目仍处于 early-stage。桌面端可运行，Android 端可配对、扫描媒体、手动同步和推送语音片段；旧的“电脑通过 mDNS 发现手机并拉取媒体”代码仍在仓库中，但当前默认运行路径是手机主动推送到桌面端。
 
 ## 架构
 
 ```
 手机 (Android)                    电脑 (Linux/Windows)
 ┌──────────────────┐             ┌──────────────────────┐
-│  HTTP Server     │◄────────────│  mDNS Discovery      │
-│  mDNS Broadcast  │   发现 →    │  (每5分钟扫描)        │
-│  _crosshare._tcp │   拉取 →    │                      │
-│                  │             │  HTTP Client         │
-│  /api/media/list │────────────►│  断点续传下载          │
-│  /api/media/dl/* │             │                      │
-│                  │             │  File Organizer      │
-│  ContentObserver │             │  YYYY/YYYY-MM-DD/    │
-│  SHA-256 Hash    │             │                      │
-└──────────────────┘             │  System Tray         │
-                                 │  SQLite DB           │
+│  MediaStore Scan │             │  HTTP API             │
+│  SHA-256 Hash    │             │  /api/pair            │
+│  Manual Sync     │────────────►│  /api/synced          │
+│                  │  上传媒体 → │  /api/media/upload/*  │
+│  AudioRecord     │────────────►│  /api/audio/stream    │
+│                  │  上传语音 → │                      │
+│  Jetpack Compose │             │  File Organizer       │
+└──────────────────┘             │  YYYY/YYYY-MM-DD/     │
+                                 │  Local Web UI         │
+                                 │  SQLite DB            │
                                  └──────────────────────┘
 ```
 
 ## 功能特性
 
-- 📡 **自动发现** — 电脑每5分钟通过 mDNS 扫描手机是否在线
-- 📷 **照片+视频同步** — 支持所有相册中的照片和视频
-- ⏸️ **断点续传** — 大文件传输中断后自动从断点恢复
+- 📷 **照片+视频同步** — Android 端扫描 MediaStore，手动推送未同步文件
+- 🎙️ **手机语音输入** — Android 端检测语音片段并上传到桌面端保存为 WAV
 - 📁 **日期归档** — 按 `YYYY/YYYY-MM-DD/` 目录结构自动整理
-- 🔑 **安全配对** — 6位配对码 + API Token 认证
+- 🔑 **配对认证** — 6位配对码 + API Token，配对失败会限流
 - 👨‍👩‍👧‍👦 **多设备支持** — 支持多台手机同步到一台电脑
-- 🖥️ **系统托盘** — 最小化后台运行，不占桌面空间
+- 🖥️ **系统托盘 / 本机 Web UI** — 桌面端可托盘运行，也可作为 systemd user service 常驻
 - 🔄 **内容去重** — 基于 SHA-256 哈希，不会重复同步
 
 ## 桌面端 (Go)
@@ -126,7 +126,7 @@ CROSSHARE_SPEECH_AUTOSTART=0 ./crosshare --no-tray
 1. 在 `~/.crosshare/` 创建配置文件
 2. 普通运行时在系统托盘显示图标，`--no-tray`/systemd 运行时提供本机 Web UI
 3. 生成6位配对码（在托盘菜单或本机 Web UI 中查看）
-4. 开始每5分钟扫描局域网中的手机
+4. 等待 Android 端用配对码连接并上传媒体或音频
 
 ### 配置
 
@@ -160,26 +160,36 @@ CROSSHARE_SPEECH_AUTOSTART=0 ./crosshare --no-tray
 ### 工作流程
 
 1. 安装 App → 连接到和电脑相同的 WiFi
-2. 输入电脑上显示的6位配对码
-3. App 后台广播 mDNS 服务
-4. 电脑发现手机后自动拉取新照片/视频
-5. 也可以手动打开 App 触发同步
+2. 输入电脑上显示的6位配对码、电脑局域网 IP 和端口
+3. App 保存电脑返回的 API Token
+4. 手动扫描并上传未同步照片/视频
+5. 可启动麦克风监听，检测到语音片段后上传到电脑
 
 ## 同步流程
 
 ```
-电脑发现手机 (mDNS)
+Android 扫描 MediaStore 并计算 SHA-256
   ↓
-电脑请求手机的媒体列表 (GET /api/media/list)
+Android 请求桌面端已同步 hash 列表 (GET /api/synced)
   ↓
-电脑对比本地DB，找出未同步的文件
+Android 对比本地 DB，找出未同步文件
   ↓
-电脑逐个下载新文件 (GET /api/media/download/{hash})
-  ↓ 支持 Range 断点续传
+Android 逐个上传新文件 (POST /api/media/upload/{hash})
+  ↓
 按 EXIF 拍摄日期归档到 YYYY/YYYY-MM-DD/
   ↓
 记录到 SQLite 数据库（content_hash 去重）
 ```
+
+## 安全模型
+
+CrossHare 目前面向可信局域网使用，不适合直接暴露到公网。
+
+- 桌面端 HTTP API 默认监听局域网地址，Android 端通过明文 HTTP 连接。请只在可信 WiFi 下使用。
+- 配对需要桌面端显示的 6 位配对码；配对成功后使用随机 API Token 认证，配对失败会按来源 IP 限流。
+- 桌面端本机 UI 的敏感状态接口仅允许 loopback 访问。
+- 桌面端配置目录和 `config.json` 使用私有权限保存；Android 端禁用系统备份，避免配对 token 进入备份。
+- 可选语音识别和 Wayland 文本注入依赖本机 `localman --speech` 与 GNOME Remote Desktop portal 授权。
 
 ## 技术栈
 
@@ -187,8 +197,8 @@ CROSSHARE_SPEECH_AUTOSTART=0 ./crosshare --no-tray
 |:---|:---|
 | 桌面端 | Go, fyne.io/systray, grandcat/zeroconf, modernc.org/sqlite |
 | Android | Kotlin, Jetpack Compose, NsdManager, Room, WorkManager |
-| 发现协议 | mDNS/DNS-SD (`_crosshare._tcp`) |
-| 断点续传 | HTTP Range headers |
+| 当前同步协议 | Android 主动推送到桌面端 HTTP API |
+| 实验/历史代码 | mDNS/DNS-SD (`_crosshare._tcp`), Android embedded HTTP server |
 | 去重 | SHA-256 content hash |
 
 ## License
