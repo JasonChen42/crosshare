@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -80,10 +81,22 @@ func ConfigDir() string {
 	}
 }
 
+// EnsureConfigDir creates the config directory with private permissions.
+func EnsureConfigDir() (string, error) {
+	configDir := ConfigDir()
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(configDir, 0700); err != nil {
+		return "", err
+	}
+	return configDir, nil
+}
+
 // Load reads the config from disk, or creates a default one if it doesn't exist.
 func Load() (*Config, error) {
-	configDir := ConfigDir()
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	configDir, err := EnsureConfigDir()
+	if err != nil {
 		return nil, fmt.Errorf("failed to create config dir: %w", err)
 	}
 
@@ -127,7 +140,7 @@ func (c *Config) Save() error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return os.WriteFile(c.filePath, data, 0644)
+	return os.WriteFile(c.filePath, data, 0600)
 }
 
 // SetTargetFolder updates the target folder and saves.
@@ -153,7 +166,7 @@ func (c *Config) FindDeviceByToken(token string) *PairedDevice {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for i := range c.PairedDevices {
-		if c.PairedDevices[i].Token == token {
+		if subtle.ConstantTimeCompare([]byte(c.PairedDevices[i].Token), []byte(token)) == 1 {
 			return &c.PairedDevices[i]
 		}
 	}

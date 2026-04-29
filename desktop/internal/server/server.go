@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ type Server struct {
 	syncMgr       *csync.Manager
 	audioReceiver *audio.Receiver
 	server        *http.Server
+	pairLimiter   *pairLimiter
 	speechMu      sync.Mutex
 	speechState   speechRuntimeState
 }
@@ -65,6 +67,7 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 		db:            db,
 		syncMgr:       syncMgr,
 		audioReceiver: audioReceiver,
+		pairLimiter:   newPairLimiter(),
 	}
 
 	mux := http.NewServeMux()
@@ -189,18 +192,29 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"paired_devices": s.cfg.GetPairedDeviceCount(),
 		"synced_count":   count,
 		"synced_size":    totalSize,
-		"target_folder":  s.cfg.GetTargetFolder(),
 	})
 }
 
 // handlePair processes a pairing request from a phone.
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
+	clientKey := pairClientKey(r)
+	now := time.Now()
+	if blockedUntil, blocked := s.pairLimiter.blocked(clientKey, now); blocked {
+		writeRetryAfter(w, blockedUntil, now)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": "too many invalid pair attempts",
+		})
+		return
+	}
+
 	var req struct {
 		PairCode   string `json:"pair_code"`
 		DeviceID   string `json:"device_id"`
 		DeviceName string `json:"device_name"`
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid request body",
@@ -208,7 +222,14 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.PairCode != s.cfg.GetPairCode() {
+	if subtle.ConstantTimeCompare([]byte(req.PairCode), []byte(s.cfg.GetPairCode())) != 1 {
+		if blockedUntil, blocked := s.pairLimiter.recordFailure(clientKey, now); blocked {
+			writeRetryAfter(w, blockedUntil, now)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{
+				"error": "too many invalid pair attempts",
+			})
+			return
+		}
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "invalid pair code",
 		})
@@ -249,6 +270,8 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	s.pairLimiter.recordSuccess(clientKey)
 
 	log.Printf("[server] paired with device: %s (%s)", req.DeviceName, req.DeviceID)
 
@@ -396,7 +419,7 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	tmpDir := filepath.Join(config.ConfigDir(), "uploads")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create upload directory"})
 		return
 	}

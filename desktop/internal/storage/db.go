@@ -3,7 +3,6 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -67,8 +66,8 @@ func openSQLite(path string) (*sql.DB, error) {
 
 // Open opens or creates the SQLite database at the default config location.
 func Open() (*DB, error) {
-	dbDir := config.ConfigDir()
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
+	dbDir, err := config.EnsureConfigDir()
+	if err != nil {
 		return nil, fmt.Errorf("failed to create db dir: %w", err)
 	}
 
