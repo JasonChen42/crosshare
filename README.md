@@ -86,16 +86,19 @@ loginctl enable-linger "$USER"
 
 ### 一键启动语音输入
 
-如果已注册 localman app，可以直接用 localman 同时启动 CrossHare 后端、语音识别服务和当前光标文本注入：
+项目自带独立语音输入命令，用于同时启动 CrossHare 后端、语音识别服务和当前光标文本注入：
 
 ```bash
-localman --app start crosshare
+cd desktop
+go run ./cmd/voiced start
 ```
 
-也可以直接运行项目内脚本：
+安装过自启动后，也可以直接运行已安装命令：
 
 ```bash
-./desktop/scripts/start-voice-input.sh
+voiced start
+voiced status
+voiced logs
 ```
 
 启动流程会：

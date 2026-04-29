@@ -3,6 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BINARY_NAME=crosshare
+VOICE_BINARY_NAME=voiced
 BIN_DIR="${HOME}/.local/bin"
 UNIT_DIR="${HOME}/.config/systemd/user"
 UNIT_NAME=crosshare.service
@@ -13,7 +14,9 @@ mkdir -p "$BIN_DIR" "$UNIT_DIR"
 
 cd "$ROOT_DIR"
 make build
+"${GO:-go}" build -o "$VOICE_BINARY_NAME" ./cmd/voiced/
 install -m 0755 "$ROOT_DIR/$BINARY_NAME" "$BIN_DIR/$BINARY_NAME"
+install -m 0755 "$ROOT_DIR/$VOICE_BINARY_NAME" "$BIN_DIR/$VOICE_BINARY_NAME"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$UNIT_NAME" "$UNIT_DIR/$UNIT_NAME"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$PRUNE_SERVICE_NAME" "$UNIT_DIR/$PRUNE_SERVICE_NAME"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$PRUNE_TIMER_NAME" "$UNIT_DIR/$PRUNE_TIMER_NAME"
@@ -53,6 +56,11 @@ CrossHare 已安装并启动。
 
 录音清理:
   已启用 $PRUNE_TIMER_NAME，每天运行一次，默认保留最近约 1GB 录音
+
+语音输入命令:
+  $VOICE_BINARY_NAME start
+  $VOICE_BINARY_NAME status
+  $VOICE_BINARY_NAME logs
 
 EOF
 

@@ -150,8 +150,8 @@ curl -fsS http://127.0.0.1:8384/api/ui/status \
 新增：
 
 ```text
+desktop/cmd/voiced/
 desktop/scripts/start-voice-input.sh
-/home/jason/development/code/llm-runtime-manager/scripts/manage/app_templates/crosshare/
 ```
 
 脚本职责：
@@ -168,21 +168,23 @@ Environment=CROSSHARE_TEXT_INJECT=1
 Environment=CROSSHARE_TEXT_INJECT_MODE=portal-unicode
 ```
 
+- 安装 `voiced` 到 `~/.local/bin`。
 - 导入当前图形会话环境到 systemd user manager，便于 Wayland portal 授权窗口正常出现。
 - 重启 CrossHare，使后端接收、speech runtime、portal-unicode 光标注入一起就绪。
-
-localman 侧新增 `crosshare` app catalog entry，`localman --app start crosshare` 会调用项目内的一键脚本。
 
 运行入口：
 
 ```bash
-localman --app start crosshare
+cd /home/jason/development/crosshare/desktop
+go run ./cmd/voiced start
 ```
 
-或直接运行：
+安装后也可以直接运行：
 
 ```bash
-/home/jason/development/crosshare/desktop/scripts/start-voice-input.sh
+voiced start
+voiced status
+voiced logs
 ```
 
 ## 录音文件管理
