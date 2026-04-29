@@ -1,5 +1,6 @@
 package com.crosshare.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -239,6 +241,10 @@ class AudioStreamService : Service() {
         computerName: String?,
         detectorConfig: DetectorConfig
     ): ListenerResult {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            throw IllegalStateException("缺少麦克风权限")
+        }
+
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         val displayName = computerName ?: "电脑"
 
