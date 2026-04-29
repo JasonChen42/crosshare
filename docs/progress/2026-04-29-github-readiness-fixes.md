@@ -56,8 +56,22 @@ b343e65 Harden Android service exposure
 b83b0c8 Document GitHub release security posture
 ```
 
-## 待验证
+### Android lint 清理
 
-- `desktop`: `go test ./...`
-- `android`: `./gradlew testDebugUnitTest`
-- `android`: `./gradlew lintDebug`
+- 补 Android backup/data extraction rules，排除 SharedPreferences、database 和 app files。
+- 使用 `Locale.US` 格式化字节大小，避免默认 locale 警告。
+- Android 11+ 才使用 `FOREGROUND_SERVICE_TYPE_MICROPHONE` 常量。
+- 返回按钮改用 `AutoMirrored` 图标。
+- 对返回给调用方关闭的 `InputStream` 添加 lint 说明。
+
+提交：
+
+```text
+1a87aed Clean up Android lint warnings
+```
+
+## 验证结果
+
+- `desktop`: `go test ./...` 通过。
+- `android`: `./gradlew testDebugUnitTest` 通过；当前没有 Android unit test source。
+- `android`: `./gradlew lintDebug` 通过，剩余 17 个 warning，集中在 targetSdk/依赖可升级和 Android 14 selected photos 行为。
