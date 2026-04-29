@@ -98,6 +98,7 @@ func (s *Server) handleUIStatus(w http.ResponseWriter, r *http.Request) {
 
 	progress := s.syncMgr.GetProgress()
 	audioStatus := s.audioReceiver.Status()
+	speechStatus := s.speechStatus()
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"device_name":    s.cfg.DeviceName,
@@ -116,7 +117,8 @@ func (s *Server) handleUIStatus(w http.ResponseWriter, r *http.Request) {
 			"bytes_done":    progress.BytesDone,
 			"error_message": progress.ErrorMessage,
 		},
-		"audio": audioStatus,
+		"audio":  audioStatus,
+		"speech": speechStatus,
 	})
 }
 
@@ -233,6 +235,19 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
       flex: 0 0 auto;
     }
     .dot.error { background: var(--red); }
+    .transcript-text {
+      min-height: 44px;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-left: 3px solid var(--blue);
+      background: #f8fafc;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .transcript-text.empty {
+      color: var(--muted);
+    }
     ul {
       list-style: none;
       margin: 0;
@@ -319,9 +334,24 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
         <div id="progressText" class="muted"></div>
       </div>
       <div class="panel full">
+        <div class="label">语音服务</div>
+        <div class="status"><span id="speechDot" class="dot"></span><span id="speechText">加载中</span></div>
+        <div id="speechMeta" class="muted"></div>
+      </div>
+      <div class="panel full">
+        <div class="label">识别准备</div>
+        <div class="status"><span id="readyDot" class="dot"></span><span id="readyText">加载中</span></div>
+        <div id="readyMeta" class="muted"></div>
+      </div>
+      <div class="panel full">
         <div class="label">麦克风传输</div>
         <div class="status"><span id="audioDot" class="dot"></span><span id="audioText">加载中</span></div>
         <div id="audioMeta" class="muted"></div>
+      </div>
+      <div class="panel full">
+        <div class="label">语音识别</div>
+        <div class="status"><span id="transcriptDot" class="dot"></span><span id="transcriptStatus">加载中</span></div>
+        <div id="transcriptText" class="transcript-text empty">等待识别内容</div>
       </div>
       <div class="panel full">
         <div class="section-head">
@@ -356,9 +386,18 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
     const statusText = document.querySelector("#statusText");
     const statusDot = document.querySelector("#statusDot");
     const progressText = document.querySelector("#progressText");
+    const speechText = document.querySelector("#speechText");
+    const speechDot = document.querySelector("#speechDot");
+    const speechMeta = document.querySelector("#speechMeta");
+    const readyText = document.querySelector("#readyText");
+    const readyDot = document.querySelector("#readyDot");
+    const readyMeta = document.querySelector("#readyMeta");
     const audioText = document.querySelector("#audioText");
     const audioDot = document.querySelector("#audioDot");
     const audioMeta = document.querySelector("#audioMeta");
+    const transcriptDot = document.querySelector("#transcriptDot");
+    const transcriptStatus = document.querySelector("#transcriptStatus");
+    const transcriptText = document.querySelector("#transcriptText");
     const targetFolder = document.querySelector("#targetFolder");
     const deviceList = document.querySelector("#deviceList");
     const deviceCount = document.querySelector("#deviceCount");
@@ -431,6 +470,65 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
       paired.forEach((device) => appendDevice(device, true));
     }
 
+    function renderSpeech(speech) {
+      const ready = Boolean(speech.ready);
+      speechDot.classList.toggle("error", !ready);
+      if (ready) {
+        speechText.textContent = "实时语音服务已就绪";
+        speechMeta.textContent = [
+          speech.realtime_url || "",
+          speech.realtime_model || "",
+          serviceLabel(speech, "gateway"),
+          serviceLabel(speech, "stt-realtime")
+        ].filter(Boolean).join(" · ");
+        return;
+      }
+
+      if (speech.error) {
+        speechText.textContent = "实时语音服务不可用";
+        speechMeta.textContent = speech.error;
+      } else if (speech.auto_start_attempted && speech.auto_start_error) {
+        speechText.textContent = "实时语音服务启动失败";
+        speechMeta.textContent = speech.auto_start_error;
+      } else if (speech.auto_start_attempted) {
+        speechText.textContent = "等待实时语音服务就绪";
+        speechMeta.textContent = speech.status || "正在检查服务状态";
+      } else {
+        speechText.textContent = "正在启动实时语音服务";
+        speechMeta.textContent = speech.status || "等待 localman 返回状态";
+      }
+    }
+
+    function serviceLabel(speech, name) {
+      const service = speech.services && speech.services[name];
+      if (!service) return "";
+      return name + " " + (service.running ? "运行中" : (service.status || "未运行"));
+    }
+
+    function renderReadiness(devices, recentCount, speech, audio) {
+      const paired = devices.length > 0;
+      const speechReady = Boolean(speech.ready);
+      const ready = paired && speechReady;
+      readyDot.classList.toggle("error", !ready);
+
+      if (!paired) {
+        readyText.textContent = "需要先配对手机";
+        readyMeta.textContent = "配对码 " + (pairCode.textContent || "------");
+      } else if (!speechReady) {
+        readyText.textContent = "等待语音服务";
+        readyMeta.textContent = speech.error || speech.auto_start_error || "服务启动后即可识别";
+      } else if (audio.active) {
+        readyText.textContent = "正在识别 " + (audio.device_name || "手机") + " 的语音";
+        readyMeta.textContent = formatBytes(audio.bytes_received || 0) + " 已接收";
+      } else if (recentCount > 0) {
+        readyText.textContent = "准备识别";
+        readyMeta.textContent = "手机已连接，开始麦克风传输后会显示识别内容";
+      } else {
+        readyText.textContent = "手机已配对，等待连接";
+        readyMeta.textContent = "在手机端启动麦克风传输";
+      }
+    }
+
     async function refresh() {
       try {
         const response = await fetch("/api/ui/status", { cache: "no-store" });
@@ -467,19 +565,22 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
         }
 
         const audio = data.audio || {};
-        audioDot.classList.toggle("error", Boolean(audio.last_error));
+        const speech = data.speech || {};
+        renderSpeech(speech);
+        renderReadiness(devices, recentCount, speech, audio);
+
+        audioDot.classList.toggle("error", Boolean(audio.last_error || audio.transcript_error));
         if (audio.active) {
           audioText.textContent = "正在接收 " + (audio.device_name || "手机") + " 的麦克风";
           audioMeta.textContent = [
             audio.current_file || "",
             formatBytes(audio.bytes_received || 0),
             audio.sample_rate ? (audio.sample_rate + " Hz") : "",
-            audio.channels ? (audio.channels + " ch") : "",
-            audio.transcript_partial ? ("识别中: " + audio.transcript_partial) : ""
+            audio.channels ? (audio.channels + " ch") : ""
           ].filter(Boolean).join(" · ");
         } else if (audio.transcript_error) {
           audioText.textContent = "实时转写异常";
-          audioMeta.textContent = audio.transcript_error;
+          audioMeta.textContent = "";
         } else if (audio.last_error) {
           audioText.textContent = audio.last_error;
           audioMeta.textContent = "";
@@ -487,12 +588,28 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
           audioText.textContent = "最近一次录音已保存";
           audioMeta.textContent = [
             audio.last_completed_file,
-            audio.transcript_final ? ("转写: " + audio.transcript_final) : "",
             audio.last_completed_at
           ].filter(Boolean).join(" · ");
         } else {
           audioText.textContent = "等待手机开始麦克风传输";
           audioMeta.textContent = "";
+        }
+
+        const transcriptValue = audio.transcript_partial || audio.transcript_final || audio.last_transcript || "";
+        transcriptDot.classList.toggle("error", Boolean(audio.transcript_error));
+        transcriptText.classList.toggle("empty", !transcriptValue);
+        if (audio.transcript_error) {
+          transcriptStatus.textContent = "识别异常";
+          transcriptText.textContent = audio.transcript_error;
+        } else if (audio.transcript_partial) {
+          transcriptStatus.textContent = "正在识别";
+          transcriptText.textContent = transcriptValue;
+        } else if (audio.transcript_final || audio.last_transcript) {
+          transcriptStatus.textContent = audio.active ? "已生成片段" : "最近识别结果";
+          transcriptText.textContent = transcriptValue;
+        } else {
+          transcriptStatus.textContent = audio.active ? "等待模型返回" : "等待语音输入";
+          transcriptText.textContent = "等待识别内容";
         }
       } catch (error) {
         statusDot.classList.add("error");
@@ -501,6 +618,16 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
         audioDot.classList.add("error");
         audioText.textContent = "无法读取麦克风状态";
         audioMeta.textContent = "";
+        speechDot.classList.add("error");
+        speechText.textContent = "无法读取语音服务状态";
+        speechMeta.textContent = String(error.message || error);
+        readyDot.classList.add("error");
+        readyText.textContent = "无法判断识别准备状态";
+        readyMeta.textContent = "";
+        transcriptDot.classList.add("error");
+        transcriptStatus.textContent = "无法读取识别状态";
+        transcriptText.classList.add("empty");
+        transcriptText.textContent = "";
       }
     }
 

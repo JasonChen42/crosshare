@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -24,25 +25,30 @@ type StreamMeta struct {
 }
 
 type Status struct {
-	Active            bool   `json:"active"`
-	DeviceID          string `json:"device_id,omitempty"`
-	DeviceName        string `json:"device_name,omitempty"`
-	SessionID         string `json:"session_id,omitempty"`
-	SampleRate        int    `json:"sample_rate,omitempty"`
-	Channels          int    `json:"channels,omitempty"`
-	BitsPerSample     int    `json:"bits_per_sample,omitempty"`
-	StartedAt         string `json:"started_at,omitempty"`
-	BytesReceived     int64  `json:"bytes_received,omitempty"`
-	CurrentFile       string `json:"current_file,omitempty"`
-	CurrentPath       string `json:"current_path,omitempty"`
-	LastCompletedFile string `json:"last_completed_file,omitempty"`
-	LastCompletedPath string `json:"last_completed_path,omitempty"`
-	LastCompletedAt   string `json:"last_completed_at,omitempty"`
-	TranscriptPartial string `json:"transcript_partial,omitempty"`
-	TranscriptFinal   string `json:"transcript_final,omitempty"`
-	LastTranscript    string `json:"last_transcript,omitempty"`
-	TranscriptError   string `json:"transcript_error,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
+	Active               bool   `json:"active"`
+	DeviceID             string `json:"device_id,omitempty"`
+	DeviceName           string `json:"device_name,omitempty"`
+	SessionID            string `json:"session_id,omitempty"`
+	SampleRate           int    `json:"sample_rate,omitempty"`
+	Channels             int    `json:"channels,omitempty"`
+	BitsPerSample        int    `json:"bits_per_sample,omitempty"`
+	StartedAt            string `json:"started_at,omitempty"`
+	BytesReceived        int64  `json:"bytes_received,omitempty"`
+	CurrentFile          string `json:"current_file,omitempty"`
+	CurrentPath          string `json:"current_path,omitempty"`
+	LastCompletedFile    string `json:"last_completed_file,omitempty"`
+	LastCompletedPath    string `json:"last_completed_path,omitempty"`
+	LastCompletedAt      string `json:"last_completed_at,omitempty"`
+	TranscriptPartial    string `json:"transcript_partial,omitempty"`
+	TranscriptFinal      string `json:"transcript_final,omitempty"`
+	LastTranscript       string `json:"last_transcript,omitempty"`
+	TranscriptError      string `json:"transcript_error,omitempty"`
+	TextInjectionEnabled bool   `json:"text_injection_enabled,omitempty"`
+	TextInjectionStatus  string `json:"text_injection_status,omitempty"`
+	TextInjectionError   string `json:"text_injection_error,omitempty"`
+	LastInjectedText     string `json:"last_injected_text,omitempty"`
+	LastInjectedAt       string `json:"last_injected_at,omitempty"`
+	LastError            string `json:"last_error,omitempty"`
 }
 
 type ReceiveResult struct {
@@ -50,6 +56,8 @@ type ReceiveResult struct {
 	FileName     string
 	BytesWritten int64
 	Transcript   string
+	StartedAt    time.Time
+	CompletedAt  time.Time
 }
 
 type TranscriptUpdate struct {
@@ -68,9 +76,14 @@ type RealtimeTranscriptStream interface {
 	Close() error
 }
 
+type TextInjector interface {
+	InjectText(ctx context.Context, text string) error
+}
+
 type Receiver struct {
 	targetRoot  string
 	transcriber RealtimeTranscriber
+	injector    TextInjector
 
 	mu     sync.RWMutex
 	status Status
@@ -84,6 +97,16 @@ func (r *Receiver) SetTranscriber(transcriber RealtimeTranscriber) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.transcriber = transcriber
+}
+
+func (r *Receiver) SetTextInjector(injector TextInjector) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.injector = injector
+	r.status.TextInjectionEnabled = injector != nil
+	if injector == nil {
+		r.status.TextInjectionStatus = ""
+	}
 }
 
 func (r *Receiver) Status() Status {
@@ -242,6 +265,7 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 	}
 
 	success = true
+	completedAt := time.Now()
 	r.finishSuccess(fileName, finalPath)
 	status := r.Status()
 
@@ -250,6 +274,8 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 		FileName:     fileName,
 		BytesWritten: bytesWritten,
 		Transcript:   status.LastTranscript,
+		StartedAt:    now,
+		CompletedAt:  completedAt,
 	}, nil
 }
 
@@ -297,8 +323,8 @@ func (r *Receiver) updateBytes(bytesWritten int64) {
 }
 
 func (r *Receiver) updateTranscript(update TranscriptUpdate) {
+	final := ""
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if update.Partial != "" {
 		r.status.TranscriptPartial = update.Partial
 	}
@@ -306,10 +332,50 @@ func (r *Receiver) updateTranscript(update TranscriptUpdate) {
 		r.status.TranscriptFinal = update.Final
 		r.status.LastTranscript = update.Final
 		r.status.TranscriptPartial = ""
+		final = update.Final
 	}
 	if update.Error != "" {
 		r.status.TranscriptError = update.Error
 	}
+	r.mu.Unlock()
+
+	if final != "" {
+		r.injectText(final)
+	}
+}
+
+func (r *Receiver) injectText(text string) {
+	r.mu.RLock()
+	injector := r.injector
+	r.mu.RUnlock()
+	if injector == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+
+	r.mu.Lock()
+	r.status.TextInjectionEnabled = true
+	r.status.TextInjectionStatus = "injecting"
+	r.status.TextInjectionError = ""
+	r.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err := injector.InjectText(ctx, text)
+
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if err != nil {
+			r.status.TextInjectionStatus = "error"
+			r.status.TextInjectionError = err.Error()
+			return
+		}
+		r.status.TextInjectionStatus = "ok"
+		r.status.TextInjectionError = ""
+		r.status.LastInjectedText = text
+		r.status.LastInjectedAt = time.Now().Format(time.RFC3339)
+	}()
 }
 
 func (r *Receiver) finishSuccess(fileName, filePath string) {

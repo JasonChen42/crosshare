@@ -24,17 +24,35 @@ type SyncedFile struct {
 	SyncedAt     time.Time
 }
 
+// AudioRecording represents a WAV recording received from a paired phone.
+type AudioRecording struct {
+	ID            int64
+	DeviceID      string
+	DeviceName    string
+	SessionID     string
+	FileName      string
+	LocalPath     string
+	FileSize      int64
+	SampleRate    int
+	Channels      int
+	BitsPerSample int
+	Transcript    string
+	StartedAt     time.Time
+	CompletedAt   time.Time
+	CreatedAt     time.Time
+}
+
 // DownloadProgress tracks partial downloads for resume support.
 type DownloadProgress struct {
-	ContentHash    string
-	DeviceID       string
-	OriginalName   string
-	TempPath       string
-	BytesReceived  int64
-	TotalSize      int64
-	DateTaken      time.Time
-	MediaType      string
-	LastUpdated    time.Time
+	ContentHash   string
+	DeviceID      string
+	OriginalName  string
+	TempPath      string
+	BytesReceived int64
+	TotalSize     int64
+	DateTaken     time.Time
+	MediaType     string
+	LastUpdated   time.Time
 }
 
 // DB wraps the SQLite database.
@@ -119,6 +137,28 @@ func (d *DB) migrate() error {
 			last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (content_hash, device_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS audio_recordings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			device_id TEXT NOT NULL DEFAULT '',
+			device_name TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			file_name TEXT NOT NULL,
+			local_path TEXT NOT NULL,
+			file_size INTEGER NOT NULL DEFAULT 0,
+			sample_rate INTEGER NOT NULL DEFAULT 0,
+			channels INTEGER NOT NULL DEFAULT 0,
+			bits_per_sample INTEGER NOT NULL DEFAULT 0,
+			transcript TEXT NOT NULL DEFAULT '',
+			started_at DATETIME,
+			completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_audio_recordings_local_path
+		 ON audio_recordings(local_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_audio_recordings_completed_at
+		 ON audio_recordings(completed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_audio_recordings_device
+		 ON audio_recordings(device_id)`,
 	}
 
 	for _, m := range migrations {
@@ -178,6 +218,62 @@ func (d *DB) AddSyncedFile(f *SyncedFile) error {
 func (d *DB) GetSyncStats() (count int, totalSize int64, err error) {
 	err = d.db.QueryRow(
 		"SELECT COUNT(*), COALESCE(SUM(file_size), 0) FROM synced_files",
+	).Scan(&count, &totalSize)
+	return
+}
+
+// AddAudioRecording records a completed phone audio recording.
+func (d *DB) AddAudioRecording(r *AudioRecording) error {
+	completedAt := r.CompletedAt
+	if completedAt.IsZero() {
+		completedAt = time.Now()
+	}
+	_, err := d.db.Exec(
+		`INSERT INTO audio_recordings
+		 (device_id, device_name, session_id, file_name, local_path, file_size,
+		  sample_rate, channels, bits_per_sample, transcript, started_at, completed_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(local_path) DO UPDATE SET
+		   device_id = excluded.device_id,
+		   device_name = excluded.device_name,
+		   session_id = excluded.session_id,
+		   file_name = excluded.file_name,
+		   file_size = excluded.file_size,
+		   sample_rate = excluded.sample_rate,
+		   channels = excluded.channels,
+		   bits_per_sample = excluded.bits_per_sample,
+		   transcript = excluded.transcript,
+		   started_at = excluded.started_at,
+		   completed_at = excluded.completed_at`,
+		r.DeviceID, r.DeviceName, r.SessionID, r.FileName, r.LocalPath, r.FileSize,
+		r.SampleRate, r.Channels, r.BitsPerSample, r.Transcript, r.StartedAt, completedAt, time.Now(),
+	)
+	return err
+}
+
+// GetAudioRecording returns a completed recording by local path, if present.
+func (d *DB) GetAudioRecording(localPath string) (*AudioRecording, error) {
+	r := &AudioRecording{}
+	err := d.db.QueryRow(
+		`SELECT id, device_id, device_name, session_id, file_name, local_path, file_size,
+		        sample_rate, channels, bits_per_sample, transcript, started_at, completed_at, created_at
+		   FROM audio_recordings WHERE local_path = ?`,
+		localPath,
+	).Scan(
+		&r.ID, &r.DeviceID, &r.DeviceName, &r.SessionID, &r.FileName, &r.LocalPath,
+		&r.FileSize, &r.SampleRate, &r.Channels, &r.BitsPerSample, &r.Transcript,
+		&r.StartedAt, &r.CompletedAt, &r.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+// GetAudioRecordingStats returns the total count and size of recorded audio files.
+func (d *DB) GetAudioRecordingStats() (count int, totalSize int64, err error) {
+	err = d.db.QueryRow(
+		"SELECT COUNT(*), COALESCE(SUM(file_size), 0) FROM audio_recordings",
 	).Scan(&count, &totalSize)
 	return
 }

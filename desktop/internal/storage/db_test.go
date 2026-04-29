@@ -141,6 +141,61 @@ func TestSyncStats(t *testing.T) {
 	}
 }
 
+func TestAudioRecording(t *testing.T) {
+	db := setupTestDB(t)
+
+	completedAt := time.Now().Truncate(time.Second)
+	recording := &AudioRecording{
+		DeviceID:      "phone-1",
+		DeviceName:    "Pixel",
+		SessionID:     "session-1",
+		FileName:      "12-00-00-pixel-session-1.wav",
+		LocalPath:     "/audio/12-00-00-pixel-session-1.wav",
+		FileSize:      12345,
+		SampleRate:    16000,
+		Channels:      1,
+		BitsPerSample: 16,
+		Transcript:    "hello world",
+		StartedAt:     completedAt.Add(-2 * time.Second),
+		CompletedAt:   completedAt,
+	}
+
+	if err := db.AddAudioRecording(recording); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.GetAudioRecording(recording.LocalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected recording")
+	}
+	if got.Transcript != "hello world" {
+		t.Fatalf("Transcript = %q, want hello world", got.Transcript)
+	}
+	if got.FileSize != 12345 {
+		t.Fatalf("FileSize = %d, want 12345", got.FileSize)
+	}
+
+	recording.Transcript = "updated transcript"
+	recording.FileSize = 23456
+	if err := db.AddAudioRecording(recording); err != nil {
+		t.Fatal(err)
+	}
+
+	count, size, err := db.GetAudioRecordingStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if size != 23456 {
+		t.Fatalf("size = %d, want 23456", size)
+	}
+}
+
 func TestDownloadProgress(t *testing.T) {
 	db := setupTestDB(t)
 

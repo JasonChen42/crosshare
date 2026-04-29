@@ -125,12 +125,12 @@ fun AudioSensitivityCard(
         Triple(
             AudioStreamService.AUDIO_SENSITIVITY_BALANCED,
             "平衡",
-            "默认建议档，正常说话容易触发，误触发更少"
+            "默认建议档，保留句尾，同时控制误触发"
         ),
         Triple(
             AudioStreamService.AUDIO_SENSITIVITY_SENSITIVE,
             "高敏",
-            "更容易触发，适合轻声说话，但更容易误检"
+            "更容易触发和延长收尾，适合轻声说话，但更容易误检"
         )
     )
 

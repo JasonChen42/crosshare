@@ -70,6 +70,7 @@ make install-autostart
 - 本机 UI：`http://127.0.0.1:8384/`
 - 查看状态：`systemctl --user status crosshare.service`
 - 查看日志：`journalctl --user -u crosshare.service -f`
+- 语音服务：默认通过 `localman --speech start --json` 自动拉起，并在 UI 中显示状态
 
 安装脚本会尝试启用 systemd linger，让服务在 Linux 开机后、用户未登录时也能自动启动。如果系统拒绝自动启用，可手动运行：
 
@@ -81,6 +82,41 @@ loginctl enable-linger "$USER"
 
 ```bash
 ./crosshare --no-tray
+```
+
+### 一键启动语音输入
+
+如果已注册 localman app，可以直接用 localman 同时启动 CrossHare 后端、语音识别服务和当前光标文本注入：
+
+```bash
+localman --app start crosshare
+```
+
+也可以直接运行项目内脚本：
+
+```bash
+./desktop/scripts/start-voice-input.sh
+```
+
+启动流程会：
+
+1. 构建并安装 `~/.local/bin/crosshare`
+2. 执行 `localman --speech start --json`
+3. 为 `crosshare.service` 写入 `CROSSHARE_TEXT_INJECT=1` 和 `CROSSHARE_TEXT_INJECT_MODE=portal-unicode`
+4. 重启用户级 systemd 服务
+
+第一次注入到当前光标输入框时，GNOME 可能会弹出 Remote Desktop 授权窗口；允许后，把焦点放在目标输入框并从手机端开始说话即可。
+
+实时语音识别默认连接：
+
+```text
+ws://127.0.0.1:8000/v1/audio/realtime
+```
+
+如果不想让 CrossHare 启动时自动拉起本机语音服务，可以设置：
+
+```bash
+CROSSHARE_SPEECH_AUTOSTART=0 ./crosshare --no-tray
 ```
 
 首次运行会：

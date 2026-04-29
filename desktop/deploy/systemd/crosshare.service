@@ -9,5 +9,16 @@ ExecStart=%h/.local/bin/crosshare --no-tray
 Restart=on-failure
 RestartSec=5s
 
+# Optional Wayland text injection. Enable in a user drop-in when this machine
+# should inject final speech transcripts into the focused text field:
+#
+#   systemctl --user edit crosshare
+#
+# Then add:
+#
+#   [Service]
+#   Environment=CROSSHARE_TEXT_INJECT=1
+#   Environment=CROSSHARE_TEXT_INJECT_MODE=portal-unicode
+
 [Install]
 WantedBy=default.target

@@ -101,8 +101,10 @@ class AudioStreamService : Service() {
     )
 
     private data class DetectorConfig(
-        val noiseMultiplier: Double,
-        val minLevel: Double,
+        val startNoiseMultiplier: Double,
+        val startMinLevel: Double,
+        val continueNoiseMultiplier: Double,
+        val continueMinLevel: Double,
         val startSpeechFrames: Int,
         val stopSilenceFrames: Int
     )
@@ -298,10 +300,10 @@ class AudioStreamService : Service() {
 
                 val frame = frameBuffer.copyOf(read)
                 val level = calculateFrameLevel(frame)
-                val threshold = max(noiseFloor * detectorConfig.noiseMultiplier, detectorConfig.minLevel)
-                val isSpeech = level >= threshold
 
                 if (uploader == null) {
+                    val threshold = max(noiseFloor * detectorConfig.startNoiseMultiplier, detectorConfig.startMinLevel)
+                    val isSpeech = level >= threshold
                     if (isSpeech) {
                         speechLeadInFrames.addLast(frame)
                         consecutiveSpeechFrames += 1
@@ -346,6 +348,8 @@ class AudioStreamService : Service() {
                         }
                     }
                 } else {
+                    val threshold = max(noiseFloor * detectorConfig.continueNoiseMultiplier, detectorConfig.continueMinLevel)
+                    val isSpeech = level >= threshold
                     totalBytesSent += uploader.write(frame)
                     segmentFrames += 1
 
@@ -511,24 +515,30 @@ class AudioStreamService : Service() {
     private fun detectorConfigFor(key: String?): DetectorConfig {
         return when (key) {
             AUDIO_SENSITIVITY_SENSITIVE -> DetectorConfig(
-                noiseMultiplier = 3.0,
-                minLevel = 450.0,
+                startNoiseMultiplier = 2.7,
+                startMinLevel = 380.0,
+                continueNoiseMultiplier = 2.0,
+                continueMinLevel = 260.0,
                 startSpeechFrames = 3,
-                stopSilenceFrames = 35
+                stopSilenceFrames = 60
             )
 
             AUDIO_SENSITIVITY_STRICT -> DetectorConfig(
-                noiseMultiplier = 5.0,
-                minLevel = 1100.0,
+                startNoiseMultiplier = 4.5,
+                startMinLevel = 950.0,
+                continueNoiseMultiplier = 3.2,
+                continueMinLevel = 700.0,
                 startSpeechFrames = 6,
-                stopSilenceFrames = 45
+                stopSilenceFrames = 70
             )
 
             else -> DetectorConfig(
-                noiseMultiplier = 4.0,
-                minLevel = 800.0,
+                startNoiseMultiplier = 3.4,
+                startMinLevel = 650.0,
+                continueNoiseMultiplier = 2.5,
+                continueMinLevel = 460.0,
                 startSpeechFrames = 5,
-                stopSilenceFrames = 40
+                stopSilenceFrames = 65
             )
         }
     }

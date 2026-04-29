@@ -6,6 +6,8 @@ BINARY_NAME=crosshare
 BIN_DIR="${HOME}/.local/bin"
 UNIT_DIR="${HOME}/.config/systemd/user"
 UNIT_NAME=crosshare.service
+PRUNE_SERVICE_NAME=crosshare-audio-prune.service
+PRUNE_TIMER_NAME=crosshare-audio-prune.timer
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR"
 
@@ -13,9 +15,12 @@ cd "$ROOT_DIR"
 make build
 install -m 0755 "$ROOT_DIR/$BINARY_NAME" "$BIN_DIR/$BINARY_NAME"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$UNIT_NAME" "$UNIT_DIR/$UNIT_NAME"
+install -m 0644 "$ROOT_DIR/deploy/systemd/$PRUNE_SERVICE_NAME" "$UNIT_DIR/$PRUNE_SERVICE_NAME"
+install -m 0644 "$ROOT_DIR/deploy/systemd/$PRUNE_TIMER_NAME" "$UNIT_DIR/$PRUNE_TIMER_NAME"
 
 systemctl --user daemon-reload
 systemctl --user enable --now "$UNIT_NAME"
+systemctl --user enable --now "$PRUNE_TIMER_NAME"
 
 LINGER_STATUS=unknown
 if command -v loginctl >/dev/null 2>&1; then
@@ -36,11 +41,18 @@ CrossHare 已安装并启动。
 本机 UI:
   http://127.0.0.1:8384/
 
+语音识别:
+  CrossHare 启动时会尝试运行 localman --speech start --json
+  UI 会显示配对状态、语音服务状态和识别准备状态
+
 查看状态:
   systemctl --user status $UNIT_NAME
 
 查看日志:
   journalctl --user -u $UNIT_NAME -f
+
+录音清理:
+  已启用 $PRUNE_TIMER_NAME，每天运行一次，默认保留最近约 1GB 录音
 
 EOF
 

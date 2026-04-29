@@ -13,10 +13,12 @@ import (
 )
 
 const DefaultURL = "ws://127.0.0.1:8000/v1/audio/realtime"
+const DefaultPartialIntervalMS = 1600
 
 type Client struct {
 	URL          string
 	Language     string
+	PartialMS    int
 	DialTimeout  time.Duration
 	EventTimeout time.Duration
 	WriteTimeout time.Duration
@@ -29,8 +31,9 @@ func NewClient(rawURL string) *Client {
 	return &Client{
 		URL:          rawURL,
 		Language:     "auto",
+		PartialMS:    DefaultPartialIntervalMS,
 		DialTimeout:  3 * time.Second,
-		EventTimeout: 2 * time.Second,
+		EventTimeout: 10 * time.Second,
 		WriteTimeout: 2 * time.Second,
 	}
 }
@@ -63,6 +66,10 @@ func (c *Client) Start(meta audio.StreamMeta, onUpdate func(audio.TranscriptUpda
 	if language == "" {
 		language = "auto"
 	}
+	partialMS := c.PartialMS
+	if partialMS <= 0 {
+		partialMS = DefaultPartialIntervalMS
+	}
 	if err := stream.expectStartupEvent("session.started"); err != nil {
 		_ = stream.Close()
 		return nil, err
@@ -74,7 +81,7 @@ func (c *Client) Start(meta audio.StreamMeta, onUpdate func(audio.TranscriptUpda
 			"audio_format":        "pcm16le",
 			"sample_rate_hz":      meta.SampleRate,
 			"channels":            meta.Channels,
-			"partial_interval_ms": 250,
+			"partial_interval_ms": partialMS,
 		},
 	}); err != nil {
 		_ = stream.Close()

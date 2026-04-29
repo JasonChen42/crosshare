@@ -5,6 +5,7 @@ DEFAULT_LIMIT_BYTES=$((1024 * 1024 * 1024))
 DEFAULT_INTERVAL_SECONDS=300
 DEFAULT_ROOT_DIR="${HOME}/Pictures/CrossHare/Audio"
 CONFIG_PATH="${HOME}/.crosshare/config.json"
+DB_PATH="${HOME}/.crosshare/crosshare.db"
 
 ROOT_DIR=""
 LIMIT_BYTES="$DEFAULT_LIMIT_BYTES"
@@ -21,6 +22,7 @@ total size exceeds the configured limit.
 
 Options:
   --root PATH         Audio root directory to monitor
+  --db PATH           SQLite database to update after deleting recordings
   --limit-bytes N     Maximum allowed bytes before pruning starts
   --interval SECONDS  Watch interval in seconds (default: $DEFAULT_INTERVAL_SECONDS)
   --once              Run one cleanup pass and exit
@@ -62,6 +64,60 @@ PY
 
 log() {
 	printf '[audio-prune] %s\n' "$*"
+}
+
+delete_db_record() {
+	local file_path="$1"
+	if [[ "$DRY_RUN" -eq 1 || ! -f "$DB_PATH" ]]; then
+		return 0
+	fi
+
+	python3 - "$DB_PATH" "$file_path" <<'PY'
+import sqlite3
+import sys
+
+db_path, file_path = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db_path)
+try:
+    try:
+        conn.execute("DELETE FROM audio_recordings WHERE local_path = ?", (file_path,))
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+finally:
+    conn.close()
+PY
+}
+
+delete_missing_db_records() {
+	if [[ "$DRY_RUN" -eq 1 || ! -f "$DB_PATH" ]]; then
+		return 0
+	fi
+
+	python3 - "$DB_PATH" <<'PY'
+import os
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+try:
+    try:
+        rows = list(conn.execute("SELECT local_path FROM audio_recordings"))
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            rows = []
+        else:
+            raise
+    missing = [(path,) for (path,) in rows if path and not os.path.exists(path)]
+    if missing:
+        conn.executemany("DELETE FROM audio_recordings WHERE local_path = ?", missing)
+        conn.commit()
+        print(f"[audio-prune] db cleanup: removed {len(missing)} missing recording rows")
+finally:
+    conn.close()
+PY
 }
 
 current_size_bytes() {
@@ -111,6 +167,7 @@ prune_once() {
 		else
 			log "delete: $file_path ($file_size bytes)"
 			rm -f -- "$file_path"
+			delete_db_record "$file_path"
 		fi
 
 		total_size=$(( total_size - file_size ))
@@ -118,6 +175,7 @@ prune_once() {
 
 	if (( DRY_RUN == 0 )); then
 		find "$root" -depth -type d -empty -delete 2>/dev/null || true
+		delete_missing_db_records
 	fi
 
 	log "done: total_bytes=$total_size"
@@ -127,6 +185,10 @@ while (( $# > 0 )); do
 	case "$1" in
 	--root)
 		ROOT_DIR="${2:?missing value for --root}"
+		shift 2
+		;;
+	--db)
+		DB_PATH="${2:?missing value for --db}"
 		shift 2
 		;;
 	--limit-bytes)

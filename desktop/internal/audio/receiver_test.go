@@ -2,11 +2,13 @@ package audio
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestReceiveWritesWaveFile(t *testing.T) {
@@ -96,6 +98,41 @@ func TestReceiveCopiesPCMToRealtimeTranscriber(t *testing.T) {
 	}
 }
 
+func TestReceiveInjectsFinalTranscript(t *testing.T) {
+	root := t.TempDir()
+	transcriber := &fakeTranscriber{}
+	injector := &fakeTextInjector{texts: make(chan string, 1)}
+	receiver := NewReceiver(root)
+	receiver.SetTranscriber(transcriber)
+	receiver.SetTextInjector(injector)
+
+	_, err := receiver.Receive(StreamMeta{
+		DeviceID:      "device-1",
+		DeviceName:    "OnePlus 12",
+		SessionID:     "session-3",
+		SampleRate:    16000,
+		Channels:      1,
+		BitsPerSample: 16,
+	}, bytes.NewReader([]byte{0x01, 0x00}))
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	select {
+	case got := <-injector.texts:
+		if got != "hello world" {
+			t.Fatalf("injected text = %q, want hello world", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for injected text")
+	}
+
+	status := receiver.Status()
+	if status.TextInjectionStatus != "ok" {
+		t.Fatalf("TextInjectionStatus = %q, want ok; error=%q", status.TextInjectionStatus, status.TextInjectionError)
+	}
+}
+
 type fakeTranscriber struct {
 	stream *fakeTranscriptStream
 }
@@ -129,5 +166,14 @@ func (f *fakeTranscriptStream) Close() error {
 		return io.ErrClosedPipe
 	}
 	f.closed = true
+	return nil
+}
+
+type fakeTextInjector struct {
+	texts chan string
+}
+
+func (f *fakeTextInjector) InjectText(_ context.Context, text string) error {
+	f.texts <- text
 	return nil
 }

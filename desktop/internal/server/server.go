@@ -14,10 +14,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crosshare/desktop/internal/audio"
 	"github.com/crosshare/desktop/internal/config"
+	"github.com/crosshare/desktop/internal/injector"
 	"github.com/crosshare/desktop/internal/organizer"
 	"github.com/crosshare/desktop/internal/storage"
 	csync "github.com/crosshare/desktop/internal/sync"
@@ -31,6 +33,8 @@ type Server struct {
 	syncMgr       *csync.Manager
 	audioReceiver *audio.Receiver
 	server        *http.Server
+	speechMu      sync.Mutex
+	speechState   speechRuntimeState
 }
 
 // New creates a new HTTP server.
@@ -42,6 +46,15 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 		client.Language = transcriptLanguageFromEnv()
 		log.Printf("[server] realtime audio transcript language: %s", client.Language)
 		audioReceiver.SetTranscriber(client)
+	}
+	if injector.EnabledFromEnv() {
+		textInjector, err := injector.NewFromEnv()
+		if err != nil {
+			log.Printf("[server] text injection disabled: %v", err)
+		} else {
+			log.Printf("[server] text injection enabled: %s", injector.ModeFromEnv())
+			audioReceiver.SetTextInjector(textInjector)
+		}
 	}
 
 	s := &Server{
@@ -75,6 +88,8 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 		WriteTimeout:      0, // No write timeout for large file uploads or audio streams
 		IdleTimeout:       120 * time.Second,
 	}
+
+	s.maybeStartSpeechRuntime()
 
 	return s
 }
@@ -297,6 +312,24 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[server] received audio stream from %s -> %s (%d bytes)", device.DeviceName, result.FileName, result.BytesWritten)
+	if err := s.db.AddAudioRecording(&storage.AudioRecording{
+		DeviceID:      meta.DeviceID,
+		DeviceName:    meta.DeviceName,
+		SessionID:     meta.SessionID,
+		FileName:      result.FileName,
+		LocalPath:     result.FilePath,
+		FileSize:      result.BytesWritten,
+		SampleRate:    meta.SampleRate,
+		Channels:      meta.Channels,
+		BitsPerSample: meta.BitsPerSample,
+		Transcript:    result.Transcript,
+		StartedAt:     result.StartedAt,
+		CompletedAt:   result.CompletedAt,
+	}); err != nil {
+		log.Printf("[server] failed to record audio metadata: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record audio metadata"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"uploaded":   true,
 		"bytes":      result.BytesWritten,

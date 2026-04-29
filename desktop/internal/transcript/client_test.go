@@ -41,15 +41,16 @@ func TestClientStreamsPCMAndReceivesTranscript(t *testing.T) {
 		var update struct {
 			Type    string `json:"type"`
 			Session struct {
-				SampleRate int `json:"sample_rate_hz"`
-				Channels   int `json:"channels"`
+				SampleRate        int `json:"sample_rate_hz"`
+				Channels          int `json:"channels"`
+				PartialIntervalMS int `json:"partial_interval_ms"`
 			} `json:"session"`
 		}
 		if err := json.Unmarshal(data, &update); err != nil {
 			t.Errorf("Unmarshal(session.update) error = %v", err)
 			return
 		}
-		if update.Type != "session.update" || update.Session.SampleRate != 16000 || update.Session.Channels != 1 {
+		if update.Type != "session.update" || update.Session.SampleRate != 16000 || update.Session.Channels != 1 || update.Session.PartialIntervalMS != DefaultPartialIntervalMS {
 			t.Errorf("unexpected session.update: %+v", update)
 			return
 		}
