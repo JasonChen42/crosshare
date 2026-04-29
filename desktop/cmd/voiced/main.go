@@ -222,6 +222,9 @@ func installCrosshare(desktopRoot string) error {
 	if err := copyFile(filepath.Join(desktopRoot, crosshareBinary), filepath.Join(binDir, crosshareBinary), 0755); err != nil {
 		return err
 	}
+	if err := copyFile(filepath.Join(desktopRoot, "scripts", "prune-audio.sh"), filepath.Join(binDir, "crosshare-audio-prune"), 0755); err != nil {
+		return err
+	}
 	for _, unit := range []string{unitName, pruneUnitName, pruneTimerName} {
 		if err := copyFile(
 			filepath.Join(desktopRoot, "deploy", "systemd", unit),

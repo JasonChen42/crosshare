@@ -17,6 +17,7 @@ make build
 "${GO:-go}" build -o "$VOICE_BINARY_NAME" ./cmd/voiced/
 install -m 0755 "$ROOT_DIR/$BINARY_NAME" "$BIN_DIR/$BINARY_NAME"
 install -m 0755 "$ROOT_DIR/$VOICE_BINARY_NAME" "$BIN_DIR/$VOICE_BINARY_NAME"
+install -m 0755 "$ROOT_DIR/scripts/prune-audio.sh" "$BIN_DIR/crosshare-audio-prune"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$UNIT_NAME" "$UNIT_DIR/$UNIT_NAME"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$PRUNE_SERVICE_NAME" "$UNIT_DIR/$PRUNE_SERVICE_NAME"
 install -m 0644 "$ROOT_DIR/deploy/systemd/$PRUNE_TIMER_NAME" "$UNIT_DIR/$PRUNE_TIMER_NAME"

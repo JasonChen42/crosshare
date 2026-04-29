@@ -3,4 +3,4 @@ Description=CrossHare audio retention cleanup
 
 [Service]
 Type=oneshot
-ExecStart=%h/development/crosshare/desktop/scripts/prune-audio.sh --once
+ExecStart=%h/.local/bin/crosshare-audio-prune --once
