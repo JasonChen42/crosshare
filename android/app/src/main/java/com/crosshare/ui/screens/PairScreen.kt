@@ -6,7 +6,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,7 +46,7 @@ fun PairScreen(
         // Top bar
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Outlined.ArrowBack, "返回", tint = TextPrimary)
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = TextPrimary)
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text("设备配对", style = MaterialTheme.typography.headlineMedium, color = TextPrimary)

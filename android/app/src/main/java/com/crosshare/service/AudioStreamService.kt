@@ -34,6 +34,7 @@ import java.io.BufferedOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.ArrayDeque
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -469,7 +470,7 @@ class AudioStreamService : Service() {
     }
 
     private fun startForegroundCompat(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
@@ -552,9 +553,9 @@ class AudioStreamService : Service() {
     private fun formatBytes(bytes: Long): String {
         if (bytes < 1024) return "$bytes B"
         val kb = bytes / 1024.0
-        if (kb < 1024) return String.format("%.1f KB", kb)
+        if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb)
         val mb = kb / 1024.0
-        return String.format("%.1f MB", mb)
+        return String.format(Locale.US, "%.1f MB", mb)
     }
 
     private inner class SegmentUploader(

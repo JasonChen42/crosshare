@@ -2,8 +2,8 @@
     <string name="app_name">CrossHare</string>
     <string name="sync_notification_channel">同步服务</string>
     <string name="sync_notification_title">CrossHare 同步服务运行中</string>
-    <string name="sync_notification_text">等待电脑连接...</string>
+    <string name="sync_notification_text">正在启动…</string>
     <string name="audio_notification_channel">麦克风传输</string>
     <string name="audio_notification_title">CrossHare 麦克风传输运行中</string>
-    <string name="audio_notification_text">等待连接电脑...</string>
+    <string name="audio_notification_text">等待连接电脑…</string>
 </resources>

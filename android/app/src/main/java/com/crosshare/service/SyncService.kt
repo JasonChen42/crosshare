@@ -83,7 +83,7 @@ class SyncService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "SyncService starting")
 
-        startForeground(NOTIFICATION_ID, createNotification("正在启动..."))
+        startForeground(NOTIFICATION_ID, createNotification(getString(R.string.sync_notification_text)))
 
         if (intent?.action == "com.crosshare.ACTION_RESCAN") {
             rescan()

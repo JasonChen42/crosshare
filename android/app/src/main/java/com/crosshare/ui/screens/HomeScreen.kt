@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.crosshare.service.AudioStreamService
 import com.crosshare.service.SyncService
 import com.crosshare.ui.theme.*
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -483,7 +484,7 @@ fun StatCard(
 private fun formatBytes(bytes: Long): String {
     if (bytes < 1024) return "${bytes} B"
     val kb = bytes / 1024.0
-    if (kb < 1024) return String.format("%.1f KB", kb)
+    if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb)
     val mb = kb / 1024.0
-    return String.format("%.1f MB", mb)
+    return String.format(Locale.US, "%.1f MB", mb)
 }

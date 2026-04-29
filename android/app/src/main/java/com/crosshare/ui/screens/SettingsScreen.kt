@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,7 +40,7 @@ fun SettingsScreen(
         // Top bar
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Outlined.ArrowBack, "返回", tint = TextPrimary)
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = TextPrimary)
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text("设置", style = MaterialTheme.typography.headlineMedium, color = TextPrimary)

@@ -1,5 +1,6 @@
 package com.crosshare.data.repository
 
+import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
@@ -153,6 +154,7 @@ class MediaRepository(private val context: Context) {
      * Opens an InputStream for the given content hash.
      * Used by the HTTP server to serve files to the desktop.
      */
+    @SuppressLint("Recycle")
     suspend fun openInputStream(hash: String): InputStream? = withContext(Dispatchers.IO) {
         val entity = dao.getByHash(hash) ?: return@withContext null
 
