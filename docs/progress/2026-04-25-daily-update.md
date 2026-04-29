@@ -48,7 +48,7 @@ http://127.0.0.1:8384/
 手机端连接电脑的局域网地址当前为：
 
 ```text
-192.168.1.200:8384
+<desktop-lan-ip>:8384
 ```
 
 实时语音统一入口：
@@ -64,7 +64,7 @@ ws://127.0.0.1:8000/v1/audio/realtime
 确认 `crosshare.service` 已经启用并运行，服务入口是：
 
 ```text
-/home/jason/.local/bin/crosshare --no-tray
+~/.local/bin/crosshare --no-tray
 ```
 
 UI 由 CrossHare 进程直接提供，端口来自配置，当前为 `8384`。页面仅允许本机访问状态接口 `/api/ui/status`。
@@ -278,7 +278,7 @@ UI 状态摘要：
 安装/更新并启用自启动：
 
 ```bash
-cd /home/jason/development/crosshare/desktop
+cd <repo>/desktop
 make install-autostart
 ```
 

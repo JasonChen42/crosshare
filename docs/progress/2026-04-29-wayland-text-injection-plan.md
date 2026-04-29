@@ -177,7 +177,7 @@ Environment=CROSSHARE_TEXT_INJECT_PREAUTHORIZE=1
 运行入口：
 
 ```bash
-cd /home/jason/development/crosshare/desktop
+cd <repo>/desktop
 go run ./cmd/voiced start
 ```
 
@@ -216,7 +216,7 @@ crosshare-audio-prune.timer
 当前本机已安装并启用：
 
 ```text
-Loaded: /home/jason/.config/systemd/user/crosshare-audio-prune.timer
+Loaded: ~/.config/systemd/user/crosshare-audio-prune.timer
 Active: active (waiting)
 Next trigger: 2026-04-30 00:00:00 BST
 ```
@@ -226,7 +226,7 @@ Next trigger: 2026-04-30 00:00:00 BST
 验证：
 
 ```bash
-cd /home/jason/development/crosshare/desktop
+cd <repo>/desktop
 go test ./...
 ```
 
