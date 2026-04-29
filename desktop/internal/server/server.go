@@ -54,6 +54,9 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 		} else {
 			log.Printf("[server] text injection enabled: %s", injector.ModeFromEnv())
 			audioReceiver.SetTextInjector(textInjector)
+			if injector.PreauthorizeFromEnv() {
+				go preauthorizeTextInjection(textInjector)
+			}
 		}
 	}
 
@@ -92,6 +95,18 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 	s.maybeStartSpeechRuntime()
 
 	return s
+}
+
+func preauthorizeTextInjection(textInjector *injector.PortalUnicode) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	log.Printf("[server] requesting text injection portal authorization")
+	if err := textInjector.Preauthorize(ctx); err != nil {
+		log.Printf("[server] text injection portal authorization failed: %v", err)
+		return
+	}
+	log.Printf("[server] text injection portal authorization ready")
 }
 
 func transcriptURLFromEnv() string {

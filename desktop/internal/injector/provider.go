@@ -20,6 +20,15 @@ func EnabledFromEnv() bool {
 	}
 }
 
+func PreauthorizeFromEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CROSSHARE_TEXT_INJECT_PREAUTHORIZE"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 func ModeFromEnv() string {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("CROSSHARE_TEXT_INJECT_MODE")))
 	if mode == "" {

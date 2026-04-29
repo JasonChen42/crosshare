@@ -44,20 +44,39 @@ func NewPortalUnicode() (*PortalUnicode, error) {
 	return &PortalUnicode{conn: conn, delay: 6 * time.Millisecond}, nil
 }
 
+func (p *PortalUnicode) Preauthorize(ctx context.Context) error {
+	return p.ensureSession(ctx)
+}
+
 func (p *PortalUnicode) InjectText(ctx context.Context, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if err := p.ensureSession(ctx); err != nil {
-		return err
-	}
 
-	for _, r := range text {
-		if err := p.injectRune(ctx, r); err != nil {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := p.ensureSession(ctx); err != nil {
 			return err
 		}
+
+		injectedRunes := 0
+		for _, r := range text {
+			if err := p.injectRune(ctx, r); err != nil {
+				lastErr = err
+				if injectedRunes == 0 && isInvalidSessionError(err) {
+					p.resetSession()
+					break
+				}
+				return err
+			}
+			injectedRunes++
+		}
+		if lastErr == nil || !isInvalidSessionError(lastErr) {
+			return lastErr
+		}
+		lastErr = nil
 	}
-	return nil
+	return errors.New("portal remote desktop session is invalid")
 }
 
 func (p *PortalUnicode) ensureSession(ctx context.Context) error {
@@ -79,6 +98,12 @@ func (p *PortalUnicode) ensureSession(ctx context.Context) error {
 	}
 	p.session = session
 	return nil
+}
+
+func (p *PortalUnicode) resetSession() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.session = ""
 }
 
 func (p *PortalUnicode) createSession(ctx context.Context) (dbus.ObjectPath, error) {
@@ -287,4 +312,8 @@ func objectPathVariant(value dbus.Variant) (dbus.ObjectPath, error) {
 
 func token(prefix string) string {
 	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Int63())
+}
+
+func isInvalidSessionError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid session")
 }

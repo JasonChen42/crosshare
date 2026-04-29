@@ -166,11 +166,13 @@ desktop/scripts/start-voice-input.sh
 Environment=CROSSHARE_SPEECH_AUTOSTART=1
 Environment=CROSSHARE_TEXT_INJECT=1
 Environment=CROSSHARE_TEXT_INJECT_MODE=portal-unicode
+Environment=CROSSHARE_TEXT_INJECT_PREAUTHORIZE=1
 ```
 
 - 安装 `voiced` 到 `~/.local/bin`。
 - 导入当前图形会话环境到 systemd user manager，便于 Wayland portal 授权窗口正常出现。
 - 重启 CrossHare，使后端接收、speech runtime、portal-unicode 光标注入一起就绪。
+- CrossHare 启动后异步预申请 RemoteDesktop portal 授权；用户点击允许后，后续识别文本可直接注入。
 
 运行入口：
 

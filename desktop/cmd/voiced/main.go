@@ -236,6 +236,7 @@ func installCrosshare(desktopRoot string) error {
 Environment=CROSSHARE_SPEECH_AUTOSTART=1
 Environment=CROSSHARE_TEXT_INJECT=1
 Environment=CROSSHARE_TEXT_INJECT_MODE=portal-unicode
+Environment=CROSSHARE_TEXT_INJECT_PREAUTHORIZE=1
 `
 	return os.WriteFile(filepath.Join(dropinDir, "10-voice-input.conf"), []byte(dropin), 0644)
 }
@@ -367,10 +368,14 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	dstDir := filepath.Dir(dst)
+	out, err := os.CreateTemp(dstDir, "."+filepath.Base(dst)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmpPath := out.Name()
+	defer os.Remove(tmpPath)
+
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
 		return err
@@ -378,7 +383,10 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(dst, mode)
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, dst)
 }
 
 func homeDir() string {

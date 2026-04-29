@@ -19,6 +19,7 @@ RestartSec=5s
 #   [Service]
 #   Environment=CROSSHARE_TEXT_INJECT=1
 #   Environment=CROSSHARE_TEXT_INJECT_MODE=portal-unicode
+#   Environment=CROSSHARE_TEXT_INJECT_PREAUTHORIZE=1
 
 [Install]
 WantedBy=default.target
