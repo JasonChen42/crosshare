@@ -1,4 +1,5 @@
 # Local editor/agent state
+AGENTS.md
 .agents/
 .codex
 .idea/
