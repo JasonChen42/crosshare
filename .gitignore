@@ -1,7 +1,17 @@
 # Local editor/agent state
+.agents/
 .codex
 .idea/
 .vscode/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.jks
+*.keystore
+*.pem
 
 # OS files
 .DS_Store
@@ -19,15 +29,23 @@ local.properties
 # Go build output
 /desktop/crosshare
 /desktop/crosshare.exe
+/desktop/voiced
+/desktop/voiced.exe
 /desktop/crosshare-*
 /desktop/*.test
+/desktop/**/*.test
 /desktop/coverage.out
+/desktop/**/coverage.out
 
 # Android / Gradle build output
 /.gradle/
 /android/.gradle/
+/android/.kotlin/
 /android/build/
 /android/app/build/
+/android/app/.cxx/
+/android/app/.externalNativeBuild/
+/android/captures/
 
 # Generated packages
 *.apk
