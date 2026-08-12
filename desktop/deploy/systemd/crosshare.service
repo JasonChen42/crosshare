@@ -8,6 +8,7 @@ Type=simple
 ExecStart=%h/.local/bin/crosshare --no-tray
 Restart=on-failure
 RestartSec=5s
+Environment=CROSSHARE_TRANSCRIPT_WS=ws://127.0.0.1:8013/v1/audio/realtime
 
 # Optional Wayland text injection. Enable in a user drop-in when this machine
 # should inject final speech transcripts into the focused text field:

@@ -130,3 +130,39 @@ func TestPairedDeviceManagement(t *testing.T) {
 		t.Errorf("expected 0 paired devices, got %d", len(cfg.PairedDevices))
 	}
 }
+
+func TestSaveAtomicallyReplacesPrivateConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	configDir, err := EnsureConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.filePath = filepath.Join(configDir, "config.json")
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	wantTarget := filepath.Join(t.TempDir(), "target")
+	if err := cfg.SetTargetFolder(wantTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.GetTargetFolder() != wantTarget {
+		t.Fatalf("atomic save lost target folder: got %q want %q", loaded.GetTargetFolder(), wantTarget)
+	}
+	info, err := os.Stat(cfg.filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("config mode is %o, want 600", info.Mode().Perm())
+	}
+	matches, err := filepath.Glob(filepath.Join(configDir, ".config.json.tmp-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary config files remain: %v err=%v", matches, err)
+	}
+}

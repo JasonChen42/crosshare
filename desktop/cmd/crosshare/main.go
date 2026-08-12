@@ -58,15 +58,19 @@ func main() {
 
 	// Create and start HTTP server (for manual phone push + pairing)
 	srv := server.New(cfg, db, syncMgr)
+	listener, err := srv.Listen()
+	if err != nil {
+		log.Fatalf("Failed to bind HTTP server: %v", err)
+	}
 	go func() {
-		if err := srv.Start(); err != nil {
-			log.Printf("HTTP server error: %v", err)
+		if err := srv.Serve(listener); err != nil {
+			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
 
 	_, cancel := context.WithCancel(context.Background())
 
-	log.Printf("HTTP server listening on :%d", cfg.HTTPPort)
+	log.Printf("HTTP server listening on %s", listener.Addr())
 	log.Printf("Running in receive-only mode; phones push media to this computer")
 
 	// Set up graceful shutdown

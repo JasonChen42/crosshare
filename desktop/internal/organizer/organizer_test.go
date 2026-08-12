@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -43,6 +44,74 @@ func TestOrganizeFile_CreatesDateDirectories(t *testing.T) {
 	}
 	if string(data) != "fake photo data" {
 		t.Errorf("file content mismatch: got %s", string(data))
+	}
+}
+
+func TestOrganizeFile_ConcurrentDuplicateNamesDoNotOverwrite(t *testing.T) {
+	target := t.TempDir()
+	org := New(target)
+	dateTaken := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+
+	sources := []string{filepath.Join(t.TempDir(), "one.tmp"), filepath.Join(t.TempDir(), "two.tmp")}
+	contents := []string{"first payload", "second payload"}
+	for i := range sources {
+		if err := os.WriteFile(sources[i], []byte(contents[i]), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := make(chan struct{})
+	paths := make([]string, len(sources))
+	errs := make([]error, len(sources))
+	var wg sync.WaitGroup
+	for i := range sources {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			paths[index], errs[index] = org.OrganizeFile(sources[index], "same.jpg", dateTaken)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if paths[0] == paths[1] {
+		t.Fatalf("concurrent uploads used the same path %s", paths[0])
+	}
+	seen := map[string]bool{}
+	for _, finalPath := range paths {
+		data, err := os.ReadFile(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[string(data)] = true
+	}
+	for _, content := range contents {
+		if !seen[content] {
+			t.Fatalf("missing preserved content %q; saw %#v", content, seen)
+		}
+	}
+}
+
+func TestOrganizeFile_RemovesTraversalFromName(t *testing.T) {
+	target := t.TempDir()
+	source := filepath.Join(t.TempDir(), "source.tmp")
+	if err := os.WriteFile(source, []byte("safe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	finalPath, err := New(target).OrganizeFile(source, "../../outside.jpg", time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := filepath.Join(target, "2026", "2026-08-13")
+	if filepath.Dir(finalPath) != wantDir || filepath.Base(finalPath) != "outside.jpg" {
+		t.Fatalf("unexpected safe path %s", finalPath)
 	}
 }
 

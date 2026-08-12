@@ -29,7 +29,7 @@ func TestHasFile(t *testing.T) {
 		t.Error("should not have file before adding")
 	}
 
-	err = db.AddSyncedFile(&SyncedFile{
+	_, err = db.AddSyncedFile(&SyncedFile{
 		ContentHash:  "abc123",
 		OriginalName: "photo.jpg",
 		DateTaken:    time.Now(),
@@ -55,7 +55,7 @@ func TestGetSyncedHashes(t *testing.T) {
 	db := setupTestDB(t)
 
 	for _, hash := range []string{"aaa", "bbb", "ccc"} {
-		db.AddSyncedFile(&SyncedFile{
+		_, _ = db.AddSyncedFile(&SyncedFile{
 			ContentHash:  hash,
 			OriginalName: hash + ".jpg",
 			DateTaken:    time.Now(),
@@ -95,12 +95,20 @@ func TestDuplicateInsert(t *testing.T) {
 		DeviceID:     "phone-1",
 	}
 
-	if err := db.AddSyncedFile(file); err != nil {
+	inserted, err := db.AddSyncedFile(file)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !inserted {
+		t.Fatal("expected first insert to create a row")
+	}
 
-	if err := db.AddSyncedFile(file); err != nil {
+	inserted, err = db.AddSyncedFile(file)
+	if err != nil {
 		t.Fatalf("duplicate insert should not error: %v", err)
+	}
+	if inserted {
+		t.Fatal("expected duplicate insert to be ignored")
 	}
 
 	hashes, _ := db.GetSyncedHashes()
@@ -120,11 +128,11 @@ func TestSyncStats(t *testing.T) {
 		t.Errorf("expected 0/0, got count=%d size=%d", count, size)
 	}
 
-	db.AddSyncedFile(&SyncedFile{
+	_, _ = db.AddSyncedFile(&SyncedFile{
 		ContentHash: "a", OriginalName: "a.jpg", LocalPath: "/a.jpg",
 		FileSize: 1000, MediaType: "photo", DeviceID: "p1",
 	})
-	db.AddSyncedFile(&SyncedFile{
+	_, _ = db.AddSyncedFile(&SyncedFile{
 		ContentHash: "b", OriginalName: "b.mp4", LocalPath: "/b.mp4",
 		FileSize: 5000000, MediaType: "video", DeviceID: "p1",
 	})

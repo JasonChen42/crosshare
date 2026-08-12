@@ -2,16 +2,19 @@ package sync
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/crosshare/desktop/internal/config"
 	"github.com/crosshare/desktop/internal/discovery"
+	"github.com/crosshare/desktop/internal/media"
 	"github.com/crosshare/desktop/internal/organizer"
 	"github.com/crosshare/desktop/internal/storage"
 )
@@ -76,6 +79,9 @@ func NewManager(cfg *config.Config, db *storage.DB, disc *discovery.Discovery) *
 
 	// Set up discovery callback
 	disc.OnPhoneFound(func(phone *discovery.PhoneInfo) {
+		if !LegacyPullEnabledFromEnv() {
+			return
+		}
 		if !m.isPhonePaired(phone) {
 			log.Printf("[sync] found unpaired phone %s (%s), waiting for pairing", phone.DeviceName, phone.DeviceID)
 			return
@@ -84,6 +90,17 @@ func NewManager(cfg *config.Config, db *storage.DB, disc *discovery.Discovery) *
 	})
 
 	return m
+}
+
+// LegacyPullEnabledFromEnv keeps the old mDNS desktop-pull protocol opt-in.
+// The current supported protocol is authenticated Android-to-desktop push.
+func LegacyPullEnabledFromEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CROSSHARE_LEGACY_PULL_SYNC"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // OnProgressUpdate sets the callback for sync progress updates.
@@ -155,6 +172,17 @@ func (m *Manager) syncWithPhone(phone *discovery.PhoneInfo) {
 	// 3. Filter to only new items
 	var newItems []discovery.PhoneMediaItem
 	for _, item := range mediaList.Items {
+		normalizedHash, err := media.NormalizeSHA256(item.ContentHash)
+		if err != nil {
+			log.Printf("[sync] ignoring media item with invalid hash from %s: %v", phone.DeviceName, err)
+			continue
+		}
+		if item.FileSize < 0 || item.FileSize > media.MaxFileBytesFromEnv() {
+			log.Printf("[sync] ignoring media item with invalid size from %s: %d", phone.DeviceName, item.FileSize)
+			continue
+		}
+		item.ContentHash = normalizedHash
+		item.FileName = media.SafeFileName(item.FileName, normalizedHash)
 		if !syncedHashes[item.ContentHash] {
 			newItems = append(newItems, item)
 		}
@@ -173,6 +201,7 @@ func (m *Manager) syncWithPhone(phone *discovery.PhoneInfo) {
 	m.org = organizer.New(m.cfg.GetTargetFolder())
 
 	var successfulHashes []string
+	failedCount := 0
 	for i, item := range newItems {
 		m.updateProgress(SyncProgress{
 			Status:      StatusSyncing,
@@ -183,6 +212,7 @@ func (m *Manager) syncWithPhone(phone *discovery.PhoneInfo) {
 
 		if err := m.downloadAndOrganize(phone, &item, token); err != nil {
 			log.Printf("[sync] failed to download %s: %v", item.FileName, err)
+			failedCount++
 			continue
 		}
 
@@ -198,11 +228,16 @@ func (m *Manager) syncWithPhone(phone *discovery.PhoneInfo) {
 		}
 	}
 
-	m.updateProgress(SyncProgress{
+	finalProgress := SyncProgress{
 		Status:     StatusIdle,
 		FilesTotal: len(newItems),
-		FilesDone:  len(newItems),
-	})
+		FilesDone:  len(successfulHashes),
+	}
+	if failedCount > 0 {
+		finalProgress.Status = StatusError
+		finalProgress.ErrorMessage = fmt.Sprintf("%d 个文件同步失败", failedCount)
+	}
+	m.updateProgress(finalProgress)
 
 	log.Printf("[sync] completed sync with %s", phone.DeviceName)
 }
@@ -211,7 +246,7 @@ func (m *Manager) syncWithPhone(phone *discovery.PhoneInfo) {
 func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discovery.PhoneMediaItem, token string) error {
 	configDir := config.ConfigDir()
 	tmpDir := filepath.Join(configDir, "tmp")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		return fmt.Errorf("failed to create tmp dir: %w", err)
 	}
 
@@ -221,10 +256,13 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 	// Check for existing partial download
 	var offset int64
 	progress, err := m.db.GetDownloadProgress(item.ContentHash, deviceID)
-	if err == nil && progress != nil {
+	if err != nil {
+		return fmt.Errorf("failed to read download progress: %w", err)
+	}
+	if progress != nil && pathWithin(tmpDir, progress.TempPath) {
 		// Verify temp file still exists and has expected size
 		info, statErr := os.Stat(progress.TempPath)
-		if statErr == nil && info.Size() == progress.BytesReceived {
+		if statErr == nil && info.Size() == progress.BytesReceived && info.Size() <= media.MaxFileBytesFromEnv() {
 			offset = progress.BytesReceived
 			tmpPath = progress.TempPath
 			log.Printf("[sync] resuming %s from byte %d", item.FileName, offset)
@@ -232,18 +270,38 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 	}
 
 	// Download with resume support
-	body, totalSize, err := discovery.DownloadMedia(phone, item.ContentHash, token, offset)
+	body, totalSize, partial, err := discovery.DownloadMedia(phone, item.ContentHash, token, offset)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
 	defer body.Close()
+	if offset > 0 && !partial {
+		log.Printf("[sync] phone ignored range request for %s; restarting download", item.FileName)
+		offset = 0
+	}
+	if totalSize > media.MaxFileBytesFromEnv() {
+		return fmt.Errorf("download exceeds maximum size of %d bytes", media.MaxFileBytesFromEnv())
+	}
+	if item.FileSize > 0 && totalSize > 0 && totalSize != item.FileSize {
+		return fmt.Errorf("download size changed: phone listed %d bytes, response has %d", item.FileSize, totalSize)
+	}
 
 	// Open temp file for writing (append if resuming)
 	var f *os.File
+	hasher := sha256.New()
 	if offset > 0 {
+		existing, openErr := os.Open(tmpPath)
+		if openErr != nil {
+			return fmt.Errorf("failed to open partial file for verification: %w", openErr)
+		}
+		_, hashErr := io.Copy(hasher, existing)
+		closeErr := existing.Close()
+		if hashErr != nil || closeErr != nil {
+			return fmt.Errorf("failed to hash partial file: %v", firstError(hashErr, closeErr))
+		}
 		f, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_APPEND, 0644)
 	} else {
-		f, err = os.Create(tmpPath)
+		f, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to open temp file: %w", err)
@@ -254,10 +312,12 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 	buf := make([]byte, 256*1024) // 256KB buffer
 	lastProgressSave := time.Now()
 
+	limit := media.MaxFileBytesFromEnv() - offset + 1
+	limitedBody := &io.LimitedReader{R: body, N: limit}
 	for {
-		n, readErr := body.Read(buf)
+		n, readErr := limitedBody.Read(buf)
 		if n > 0 {
-			if _, writeErr := f.Write(buf[:n]); writeErr != nil {
+			if _, writeErr := io.MultiWriter(f, hasher).Write(buf[:n]); writeErr != nil {
 				f.Close()
 				return fmt.Errorf("failed to write to temp file: %w", writeErr)
 			}
@@ -266,7 +326,7 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 			// Save progress every 5 seconds
 			if time.Since(lastProgressSave) > 5*time.Second {
 				parsedDate, _ := time.Parse(time.RFC3339, item.DateTaken)
-				m.db.SaveDownloadProgress(&storage.DownloadProgress{
+				if err := m.db.SaveDownloadProgress(&storage.DownloadProgress{
 					ContentHash:   item.ContentHash,
 					DeviceID:      deviceID,
 					OriginalName:  item.FileName,
@@ -275,7 +335,10 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 					TotalSize:     totalSize,
 					DateTaken:     parsedDate,
 					MediaType:     item.MediaType,
-				})
+				}); err != nil {
+					f.Close()
+					return fmt.Errorf("failed to save download progress: %w", err)
+				}
 				lastProgressSave = time.Now()
 			}
 		}
@@ -286,7 +349,7 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 			f.Close()
 			// Save progress before returning error (for resume on retry)
 			parsedDate, _ := time.Parse(time.RFC3339, item.DateTaken)
-			m.db.SaveDownloadProgress(&storage.DownloadProgress{
+			_ = m.db.SaveDownloadProgress(&storage.DownloadProgress{
 				ContentHash:   item.ContentHash,
 				DeviceID:      deviceID,
 				OriginalName:  item.FileName,
@@ -299,7 +362,25 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 			return fmt.Errorf("download interrupted: %w", readErr)
 		}
 	}
-	f.Close()
+	if limitedBody.N == 0 {
+		f.Close()
+		return fmt.Errorf("download exceeds maximum size of %d bytes", media.MaxFileBytesFromEnv())
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	if item.FileSize > 0 && bytesWritten != item.FileSize {
+		return fmt.Errorf("download size mismatch: expected %d bytes, received %d", item.FileSize, bytesWritten)
+	}
+	if actualHash := fmt.Sprintf("%x", hasher.Sum(nil)); actualHash != item.ContentHash {
+		_ = os.Remove(tmpPath)
+		_ = m.db.DeleteDownloadProgress(item.ContentHash, deviceID)
+		return fmt.Errorf("download hash mismatch: expected %s, got %s", item.ContentHash, actualHash)
+	}
 
 	// Parse date for organization
 	dateTaken, _ := time.Parse(time.RFC3339, item.DateTaken)
@@ -311,7 +392,7 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 	}
 
 	// Record in database
-	if err := m.db.AddSyncedFile(&storage.SyncedFile{
+	inserted, err := m.db.AddSyncedFile(&storage.SyncedFile{
 		ContentHash:  item.ContentHash,
 		OriginalName: item.FileName,
 		DateTaken:    dateTaken,
@@ -319,12 +400,19 @@ func (m *Manager) downloadAndOrganize(phone *discovery.PhoneInfo, item *discover
 		FileSize:     item.FileSize,
 		MediaType:    item.MediaType,
 		DeviceID:     deviceID,
-	}); err != nil {
+	})
+	if err != nil {
+		_ = os.Remove(finalPath)
 		return fmt.Errorf("failed to record synced file: %w", err)
+	}
+	if !inserted {
+		_ = os.Remove(finalPath)
 	}
 
 	// Clean up download progress
-	m.db.DeleteDownloadProgress(item.ContentHash, deviceID)
+	if err := m.db.DeleteDownloadProgress(item.ContentHash, deviceID); err != nil {
+		return fmt.Errorf("failed to delete download progress: %w", err)
+	}
 
 	return nil
 }
@@ -345,6 +433,10 @@ func (m *Manager) isPhonePaired(phone *discovery.PhoneInfo) bool {
 
 // TriggerSync manually triggers a sync with all known phones.
 func (m *Manager) TriggerSync(_ context.Context) {
+	if !LegacyPullEnabledFromEnv() {
+		log.Printf("[sync] legacy desktop-pull sync is disabled; phones should push media to the desktop API")
+		return
+	}
 	go func() {
 		m.updateProgress(SyncProgress{Status: StatusDiscovering})
 
@@ -365,4 +457,18 @@ func (m *Manager) TriggerSync(_ context.Context) {
 			m.updateProgress(SyncProgress{Status: StatusIdle})
 		}
 	}()
+}
+
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

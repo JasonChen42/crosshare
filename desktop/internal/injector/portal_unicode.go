@@ -30,10 +30,11 @@ const (
 )
 
 type PortalUnicode struct {
-	conn    *dbus.Conn
-	session dbus.ObjectPath
-	mu      sync.Mutex
-	delay   time.Duration
+	conn     *dbus.Conn
+	session  dbus.ObjectPath
+	mu       sync.Mutex
+	typingMu sync.Mutex
+	delay    time.Duration
 }
 
 func NewPortalUnicode() (*PortalUnicode, error) {
@@ -52,6 +53,8 @@ func (p *PortalUnicode) InjectText(ctx context.Context, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
+	p.typingMu.Lock()
+	defer p.typingMu.Unlock()
 
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {

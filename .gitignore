@@ -40,6 +40,7 @@ local.properties
 
 # Android / Gradle build output
 /.gradle/
+/.gradle-cache/
 /android/.gradle/
 /android/.kotlin/
 /android/build/

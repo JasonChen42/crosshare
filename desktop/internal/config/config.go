@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,8 +43,9 @@ type Config struct {
 	// DiscoveryIntervalSeconds is how often to scan for phones (default 300 = 5min).
 	DiscoveryIntervalSeconds int `json:"discovery_interval_seconds"`
 
-	mu       sync.RWMutex
-	filePath string
+	mu        sync.RWMutex
+	filePath  string
+	seenSaved map[string]time.Time
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -63,6 +65,7 @@ func DefaultConfig() *Config {
 		PairCode:                 generatePairCode(),
 		PairedDevices:            []PairedDevice{},
 		DiscoveryIntervalSeconds: 300, // 5 minutes
+		seenSaved:                make(map[string]time.Time),
 	}
 }
 
@@ -120,11 +123,19 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	cfg.filePath = configPath
+	cfg.seenSaved = make(map[string]time.Time, len(cfg.PairedDevices))
+	for _, device := range cfg.PairedDevices {
+		if lastSeen, err := time.Parse(time.RFC3339, device.LastSeen); err == nil {
+			cfg.seenSaved[device.Token] = lastSeen
+		}
+	}
 
 	// Ensure pair code exists
 	if cfg.PairCode == "" {
 		cfg.PairCode = generatePairCode()
-		_ = cfg.Save()
+		if err := cfg.Save(); err != nil {
+			return nil, fmt.Errorf("failed to save generated pair code: %w", err)
+		}
 	}
 
 	return cfg, nil
@@ -132,33 +143,83 @@ func Load() (*Config, error) {
 
 // Save writes the config to disk.
 func (c *Config) Save() error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.saveLocked()
+}
 
+func (c *Config) saveLocked() error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return os.WriteFile(c.filePath, data, 0600)
+	if c.filePath == "" {
+		return errors.New("config file path is not set")
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(c.filePath), ".config.json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to protect temporary config: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to write temporary config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync temporary config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary config: %w", err)
+	}
+	if err := os.Rename(tmpPath, c.filePath); err != nil {
+		return fmt.Errorf("failed to replace config: %w", err)
+	}
+	if dir, err := os.Open(filepath.Dir(c.filePath)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 // SetTargetFolder updates the target folder and saves.
 func (c *Config) SetTargetFolder(path string) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := c.TargetFolder
 	c.TargetFolder = path
-	c.mu.Unlock()
-	return c.Save()
+	if err := c.saveLocked(); err != nil {
+		c.TargetFolder = previous
+		return err
+	}
+	return nil
 }
 
 // AddPairedDevice adds a new paired device and saves.
 func (c *Config) AddPairedDevice(device PairedDevice) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	previousDevices := append([]PairedDevice(nil), c.PairedDevices...)
+	previousCode := c.PairCode
 	c.PairedDevices = append(c.PairedDevices, device)
+	if c.seenSaved == nil {
+		c.seenSaved = make(map[string]time.Time)
+	}
 	// Regenerate pair code after successful pairing
 	c.PairCode = generatePairCode()
-	c.mu.Unlock()
-	return c.Save()
+	if err := c.saveLocked(); err != nil {
+		c.PairedDevices = previousDevices
+		c.PairCode = previousCode
+		return err
+	}
+	return nil
 }
 
 // FindDeviceByToken returns the paired device for a given token.
@@ -167,7 +228,8 @@ func (c *Config) FindDeviceByToken(token string) *PairedDevice {
 	defer c.mu.RUnlock()
 	for i := range c.PairedDevices {
 		if subtle.ConstantTimeCompare([]byte(c.PairedDevices[i].Token), []byte(token)) == 1 {
-			return &c.PairedDevices[i]
+			device := c.PairedDevices[i]
+			return &device
 		}
 	}
 	return nil
@@ -176,22 +238,28 @@ func (c *Config) FindDeviceByToken(token string) *PairedDevice {
 // UpdateDeviceSeenByToken records that a paired device contacted this computer.
 func (c *Config) UpdateDeviceSeenByToken(token, ip string) error {
 	c.mu.Lock()
-	updated := false
+	defer c.mu.Unlock()
 	now := timeNowRFC3339()
 	for i := range c.PairedDevices {
 		if c.PairedDevices[i].Token == token {
+			previous := c.PairedDevices[i]
 			c.PairedDevices[i].LastSeen = now
 			c.PairedDevices[i].LastIP = ip
-			updated = true
-			break
+
+			lastPersisted := c.seenSaved[token]
+			shouldPersist := previous.LastIP != ip || lastPersisted.IsZero() || time.Since(lastPersisted) >= time.Minute
+			if !shouldPersist {
+				return nil
+			}
+			if err := c.saveLocked(); err != nil {
+				c.PairedDevices[i] = previous
+				return err
+			}
+			c.seenSaved[token] = time.Now()
+			return nil
 		}
 	}
-	c.mu.Unlock()
-
-	if !updated {
-		return nil
-	}
-	return c.Save()
+	return nil
 }
 
 // GetPairedDevices returns a copy of the paired device list.
@@ -213,14 +281,32 @@ func (c *Config) GetPairedDeviceCount() int {
 // RemovePairedDevice removes a device by ID.
 func (c *Config) RemovePairedDevice(deviceID string) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := append([]PairedDevice(nil), c.PairedDevices...)
+	var removedToken string
+	var removedSaved time.Time
+	removed := false
 	for i, d := range c.PairedDevices {
 		if d.DeviceID == deviceID {
+			removedToken = d.Token
+			removedSaved = c.seenSaved[d.Token]
+			delete(c.seenSaved, d.Token)
 			c.PairedDevices = append(c.PairedDevices[:i], c.PairedDevices[i+1:]...)
+			removed = true
 			break
 		}
 	}
-	c.mu.Unlock()
-	return c.Save()
+	if !removed {
+		return nil
+	}
+	if err := c.saveLocked(); err != nil {
+		c.PairedDevices = previous
+		if !removedSaved.IsZero() {
+			c.seenSaved[removedToken] = removedSaved
+		}
+		return err
+	}
+	return nil
 }
 
 // GetTargetFolder returns the current target folder.

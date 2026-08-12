@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -21,10 +22,16 @@ import (
 	"github.com/crosshare/desktop/internal/audio"
 	"github.com/crosshare/desktop/internal/config"
 	"github.com/crosshare/desktop/internal/injector"
+	"github.com/crosshare/desktop/internal/media"
 	"github.com/crosshare/desktop/internal/organizer"
 	"github.com/crosshare/desktop/internal/storage"
 	csync "github.com/crosshare/desktop/internal/sync"
 	"github.com/crosshare/desktop/internal/transcript"
+)
+
+const (
+	defaultMaxAudioBytes = int64(64 << 20)
+	maxAudioReadDuration = 2 * time.Minute
 )
 
 // Server is the HTTP server that handles API requests from phones.
@@ -93,6 +100,7 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 		ReadHeaderTimeout: 15 * time.Second,
 		WriteTimeout:      0, // No write timeout for large file uploads or audio streams
 		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
 
 	s.maybeStartSpeechRuntime()
@@ -135,8 +143,27 @@ func transcriptLanguageFromEnv() string {
 
 // Start starts the HTTP server.
 func (s *Server) Start() error {
-	log.Printf("[server] starting HTTP server on %s", s.server.Addr)
-	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	listener, err := s.Listen()
+	if err != nil {
+		return err
+	}
+	return s.Serve(listener)
+}
+
+// Listen binds the HTTP socket synchronously so startup failures can be
+// reported before the process declares itself ready.
+func (s *Server) Listen() (net.Listener, error) {
+	log.Printf("[server] binding HTTP server on %s", s.server.Addr)
+	listener, err := net.Listen("tcp", s.server.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", s.server.Addr, err)
+	}
+	return listener, nil
+}
+
+func (s *Server) Serve(listener net.Listener) error {
+	log.Printf("[server] HTTP server listening on %s", listener.Addr())
+	if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
@@ -215,7 +242,9 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid request body",
 		})
@@ -240,6 +269,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "device_id is required",
 		})
+		return
+	}
+	if len(req.DeviceID) > 256 || len(req.DeviceName) > 256 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device identity is too long"})
 		return
 	}
 
@@ -337,12 +370,24 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	controller := http.NewResponseController(w)
+	if err := controller.SetReadDeadline(time.Now().Add(maxAudioReadDuration)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		log.Printf("[server] failed to set audio read deadline: %v", err)
+	}
+	defer controller.SetReadDeadline(time.Time{})
+	r.Body = http.MaxBytesReader(w, r.Body, maxAudioBytesFromEnv())
 	defer r.Body.Close()
 	result, err := s.audioReceiver.Receive(meta, r.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		var netErr net.Error
 		switch {
 		case errors.Is(err, audio.ErrBusy):
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		case errors.As(err, &maxBytesErr):
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "audio stream exceeds maximum size"})
+		case errors.As(err, &netErr) && netErr.Timeout():
+			writeJSON(w, http.StatusRequestTimeout, map[string]string{"error": "audio stream timed out"})
 		default:
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
@@ -385,9 +430,9 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash := r.PathValue("hash")
-	if hash == "" || strings.Contains(hash, "/") {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid content hash"})
+	hash, err := media.NormalizeSHA256(r.PathValue("hash"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -407,15 +452,18 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 	if originalName == "" {
 		originalName = hash
 	}
-	originalName = filepath.Base(originalName)
-	if originalName == "." || originalName == string(filepath.Separator) {
-		originalName = hash
-	}
+	originalName = media.SafeFileName(originalName, hash)
 
-	declaredSize, _ := strconv.ParseInt(r.Header.Get("X-CrossHare-File-Size"), 10, 64)
-	if declaredSize > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, declaredSize+1)
+	declaredSize, err := strconv.ParseInt(r.Header.Get("X-CrossHare-File-Size"), 10, 64)
+	if err != nil || declaredSize < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid X-CrossHare-File-Size header is required"})
+		return
 	}
+	if declaredSize > media.MaxFileBytesFromEnv() {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "upload exceeds maximum media size"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, declaredSize+1)
 	defer r.Body.Close()
 
 	tmpDir := filepath.Join(config.ConfigDir(), "uploads")
@@ -430,16 +478,23 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpPath := tmpFile.Name()
-	copied, copyErr := io.Copy(tmpFile, r.Body)
+	hasher := sha256.New()
+	copied, copyErr := io.Copy(io.MultiWriter(tmpFile, hasher), r.Body)
+	syncErr := tmpFile.Sync()
 	closeErr := tmpFile.Close()
-	if copyErr != nil || closeErr != nil {
+	if copyErr != nil || syncErr != nil || closeErr != nil {
 		os.Remove(tmpPath)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to receive upload"})
 		return
 	}
-	if declaredSize > 0 && copied != declaredSize {
+	if copied != declaredSize {
 		os.Remove(tmpPath)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upload size mismatch"})
+		return
+	}
+	if actualHash := fmt.Sprintf("%x", hasher.Sum(nil)); actualHash != hash {
+		os.Remove(tmpPath)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "uploaded content does not match its SHA-256 hash"})
 		return
 	}
 
@@ -457,7 +512,7 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 		mediaType = "photo"
 	}
 
-	if err := s.db.AddSyncedFile(&storage.SyncedFile{
+	inserted, err := s.db.AddSyncedFile(&storage.SyncedFile{
 		ContentHash:  hash,
 		OriginalName: originalName,
 		DateTaken:    dateTaken,
@@ -465,8 +520,19 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 		FileSize:     copied,
 		MediaType:    mediaType,
 		DeviceID:     device.DeviceID,
-	}); err != nil {
+	})
+	if err != nil {
+		_ = os.Remove(finalPath)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to record uploaded file"})
+		return
+	}
+	if !inserted {
+		_ = os.Remove(finalPath)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"hash":    hash,
+			"skipped": true,
+			"message": "already synced",
+		})
 		return
 	}
 
@@ -494,23 +560,23 @@ func timeFromMillis(value string) time.Time {
 	if err != nil || ms <= 0 {
 		return time.Time{}
 	}
-	return time.Unix(0, ms*int64(time.Millisecond))
+	return time.UnixMilli(ms)
 }
 
 func parseAudioStreamMeta(r *http.Request, device *config.PairedDevice) (audio.StreamMeta, error) {
 	sampleRate, err := strconv.Atoi(r.Header.Get("X-CrossHare-Audio-Sample-Rate"))
-	if err != nil || sampleRate <= 0 {
-		return audio.StreamMeta{}, errors.New("invalid audio sample rate")
+	if err != nil || sampleRate != 16000 {
+		return audio.StreamMeta{}, errors.New("audio sample rate must be 16000 Hz")
 	}
 
 	channels, err := strconv.Atoi(r.Header.Get("X-CrossHare-Audio-Channels"))
-	if err != nil || channels <= 0 {
-		return audio.StreamMeta{}, errors.New("invalid audio channels")
+	if err != nil || channels != 1 {
+		return audio.StreamMeta{}, errors.New("audio must be mono")
 	}
 
 	bitsPerSample, err := strconv.Atoi(r.Header.Get("X-CrossHare-Audio-Bits-Per-Sample"))
-	if err != nil || bitsPerSample <= 0 {
-		return audio.StreamMeta{}, errors.New("invalid bits per sample")
+	if err != nil || bitsPerSample != 16 {
+		return audio.StreamMeta{}, errors.New("audio must use 16-bit samples")
 	}
 
 	return audio.StreamMeta{
@@ -521,6 +587,18 @@ func parseAudioStreamMeta(r *http.Request, device *config.PairedDevice) (audio.S
 		Channels:      channels,
 		BitsPerSample: bitsPerSample,
 	}, nil
+}
+
+func maxAudioBytesFromEnv() int64 {
+	value := strings.TrimSpace(os.Getenv("CROSSHARE_MAX_AUDIO_BYTES"))
+	if value == "" {
+		return defaultMaxAudioBytes
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 || parsed >= 1<<32 {
+		return defaultMaxAudioBytes
+	}
+	return parsed
 }
 
 func netSplitHostPort(remoteAddr string) (string, string, error) {

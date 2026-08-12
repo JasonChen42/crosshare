@@ -150,7 +150,7 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 		now.Format("2006"),
 		now.Format("2006-01-02"),
 	)
-	if err := os.MkdirAll(recordingsDir, 0755); err != nil {
+	if err := os.MkdirAll(recordingsDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create recordings directory: %w", err)
 	}
 
@@ -178,7 +178,7 @@ func (r *Receiver) Receive(meta StreamMeta, body io.Reader) (*ReceiveResult, err
 		return nil, err
 	}
 
-	file, err := os.Create(tempPath)
+	file, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		r.finishWithError(err)
 		return nil, fmt.Errorf("failed to create temp recording: %w", err)
@@ -305,6 +305,11 @@ func (r *Receiver) begin(next Status) error {
 	next.LastCompletedPath = r.status.LastCompletedPath
 	next.LastCompletedAt = r.status.LastCompletedAt
 	next.LastTranscript = r.status.LastTranscript
+	next.TextInjectionEnabled = r.status.TextInjectionEnabled
+	next.TextInjectionStatus = r.status.TextInjectionStatus
+	next.TextInjectionError = r.status.TextInjectionError
+	next.LastInjectedText = r.status.LastInjectedText
+	next.LastInjectedAt = r.status.LastInjectedAt
 	next.TranscriptPartial = ""
 	next.TranscriptFinal = ""
 	next.TranscriptError = ""

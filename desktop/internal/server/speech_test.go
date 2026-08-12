@@ -26,3 +26,15 @@ service already running: gateway
 		t.Fatalf("services = %+v, want gateway and stt-realtime running", status.Services)
 	}
 }
+
+func TestSpeechReadyDoesNotRequireGateway(t *testing.T) {
+	status := speechStatus{
+		Status: "ready",
+		Services: map[string]speechServiceStatus{
+			"stt-realtime": {Running: true},
+		},
+	}
+	if !status.isReady() {
+		t.Fatal("direct realtime STT should be ready without the optional gateway")
+	}
+}

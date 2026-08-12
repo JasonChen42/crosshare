@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const DefaultURL = "ws://127.0.0.1:8000/v1/audio/realtime"
+const DefaultURL = "ws://127.0.0.1:8013/v1/audio/realtime"
 const DefaultPartialIntervalMS = 1600
 
 type Client struct {

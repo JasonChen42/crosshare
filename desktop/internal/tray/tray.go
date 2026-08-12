@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"runtime"
 
+	"fyne.io/systray"
 	"github.com/crosshare/desktop/internal/config"
 	csync "github.com/crosshare/desktop/internal/sync"
-	"fyne.io/systray"
 )
 
 // Tray manages the system tray icon and menu.
@@ -66,8 +66,11 @@ func (t *Tray) onReady() {
 
 	systray.AddSeparator()
 
-	// Sync now button
-	t.mSyncNow = systray.AddMenuItem("立即同步", "手动触发同步")
+	// The legacy desktop-pull flow is hidden unless explicitly enabled. The
+	// supported Android flow pushes media to the desktop HTTP API.
+	if csync.LegacyPullEnabledFromEnv() {
+		t.mSyncNow = systray.AddMenuItem("旧版拉取同步", "通过 mDNS 从旧版手机服务拉取媒体")
+	}
 
 	// Open target folder
 	t.mOpenFolder = systray.AddMenuItem("打开同步文件夹", "在文件管理器中打开")
@@ -104,9 +107,13 @@ func (t *Tray) onReady() {
 
 	// Handle menu clicks
 	go func() {
+		var syncClicks <-chan struct{}
+		if t.mSyncNow != nil {
+			syncClicks = t.mSyncNow.ClickedCh
+		}
 		for {
 			select {
-			case <-t.mSyncNow.ClickedCh:
+			case <-syncClicks:
 				log.Println("[tray] manual sync triggered")
 				t.syncMgr.TriggerSync(nil)
 

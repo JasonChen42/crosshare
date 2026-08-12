@@ -1,6 +1,7 @@
 package organizer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,19 +49,30 @@ func (o *Organizer) OrganizeFile(tempPath string, originalName string, dateTaken
 		return "", fmt.Errorf("failed to create directory %s: %w", destDir, err)
 	}
 
-	// Determine final filename (handle duplicates)
-	finalName := o.uniqueFilename(destDir, originalName)
-	finalPath := filepath.Join(destDir, finalName)
-
-	// Try rename first (fast, same filesystem)
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		// Cross-filesystem: fall back to copy + delete
-		if err := copyFile(tempPath, finalPath); err != nil {
-			return "", fmt.Errorf("failed to copy file: %w", err)
-		}
-		os.Remove(tempPath)
+	originalName = filepath.Base(originalName)
+	if originalName == "" || originalName == "." || originalName == string(filepath.Separator) {
+		return "", errors.New("invalid destination filename")
 	}
 
+	for i := 0; i < 10000; i++ {
+		finalName := filenameCandidate(originalName, i)
+		finalPath := filepath.Join(destDir, finalName)
+		err := moveFileNoReplace(tempPath, finalPath)
+		switch {
+		case err == nil:
+			return finalPath, nil
+		case errors.Is(err, os.ErrExist):
+			continue
+		default:
+			return "", fmt.Errorf("failed to store file: %w", err)
+		}
+	}
+
+	finalName := filenameCandidate(originalName, int(time.Now().UnixNano()))
+	finalPath := filepath.Join(destDir, finalName)
+	if err := moveFileNoReplace(tempPath, finalPath); err != nil {
+		return "", fmt.Errorf("failed to store file: %w", err)
+	}
 	return finalPath, nil
 }
 
@@ -108,23 +120,60 @@ func (o *Organizer) uniqueFilename(dir, name string) string {
 	return fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext)
 }
 
-// copyFile copies src to dst.
-func copyFile(src, dst string) error {
+func filenameCandidate(name string, suffix int) string {
+	if suffix == 0 {
+		return name
+	}
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	return fmt.Sprintf("%s_%d%s", base, suffix, ext)
+}
+
+// moveFileNoReplace atomically claims dst before installing src so concurrent
+// uploads can never overwrite one another.
+func moveFileNoReplace(src, dst string) error {
+	if err := os.Link(src, dst); err == nil {
+		_ = os.Remove(src)
+		return nil
+	} else if errors.Is(err, os.ErrExist) {
+		return os.ErrExist
+	}
+
+	if err := copyFileExclusive(src, dst); err != nil {
+		return err
+	}
+	_ = os.Remove(src)
+	return nil
+}
+
+func copyFileExclusive(src, dst string) (resultErr error) {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dst)
+	info, err := srcFile.Stat()
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = dstFile.Close()
+			_ = os.Remove(dst)
+		}
+	}()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
 		return err
 	}
-
-	return dstFile.Sync()
+	if err := dstFile.Sync(); err != nil {
+		return err
+	}
+	return dstFile.Close()
 }

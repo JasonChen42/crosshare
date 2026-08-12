@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -196,7 +197,7 @@ func (d *Discovery) handleEntry(entry *zeroconf.ServiceEntry) {
 
 // FetchMediaList fetches the list of available media from a phone.
 func FetchMediaList(phone *PhoneInfo, token string) (*PhoneMediaList, error) {
-	url := fmt.Sprintf("http://%s:%d/api/media/list", phone.IP, phone.Port)
+	url := phoneURL(phone, "/api/media/list")
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -219,7 +220,7 @@ func FetchMediaList(phone *PhoneInfo, token string) (*PhoneMediaList, error) {
 	}
 
 	var list PhoneMediaList
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&list); err != nil {
 		return nil, fmt.Errorf("failed to decode media list: %w", err)
 	}
 
@@ -229,12 +230,12 @@ func FetchMediaList(phone *PhoneInfo, token string) (*PhoneMediaList, error) {
 // DownloadMedia downloads a specific media file from the phone.
 // It supports resuming from a given offset using HTTP Range headers.
 // Returns the response body (caller must close) and the total file size.
-func DownloadMedia(phone *PhoneInfo, contentHash string, token string, offset int64) (io.ReadCloser, int64, error) {
-	url := fmt.Sprintf("http://%s:%d/api/media/download/%s", phone.IP, phone.Port, contentHash)
+func DownloadMedia(phone *PhoneInfo, contentHash string, token string, offset int64) (io.ReadCloser, int64, bool, error) {
+	url := phoneURL(phone, "/api/media/download/"+contentHash)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -243,15 +244,15 @@ func DownloadMedia(phone *PhoneInfo, contentHash string, token string, offset in
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
 
-	client := &http.Client{Timeout: 0} // No timeout for large file downloads
+	client := &http.Client{Timeout: 2 * time.Hour}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to download media: %w", err)
+		return nil, 0, false, fmt.Errorf("failed to download media: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		resp.Body.Close()
-		return nil, 0, fmt.Errorf("phone returned status %d", resp.StatusCode)
+		return nil, 0, false, fmt.Errorf("phone returned status %d", resp.StatusCode)
 	}
 
 	totalSize := resp.ContentLength
@@ -259,12 +260,12 @@ func DownloadMedia(phone *PhoneInfo, contentHash string, token string, offset in
 		totalSize += offset
 	}
 
-	return resp.Body, totalSize, nil
+	return resp.Body, totalSize, resp.StatusCode == http.StatusPartialContent, nil
 }
 
 // NotifyMediaSynced notifies the phone that a list of media items has been successfully downloaded.
 func NotifyMediaSynced(phone *PhoneInfo, token string, hashes []string) error {
-	url := fmt.Sprintf("http://%s:%d/api/media/synced", phone.IP, phone.Port)
+	url := phoneURL(phone, "/api/media/synced")
 
 	payload := map[string]interface{}{
 		"hashes": hashes,
@@ -292,4 +293,9 @@ func NotifyMediaSynced(phone *PhoneInfo, token string, hashes []string) error {
 		return fmt.Errorf("phone returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+func phoneURL(phone *PhoneInfo, endpoint string) string {
+	hostPort := net.JoinHostPort(phone.IP.String(), strconv.Itoa(phone.Port))
+	return "http://" + hostPort + endpoint
 }

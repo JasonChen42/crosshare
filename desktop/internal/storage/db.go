@@ -201,16 +201,25 @@ func (d *DB) GetSyncedHashes() (map[string]bool, error) {
 	return hashes, rows.Err()
 }
 
-// AddSyncedFile records a successfully synced file.
-func (d *DB) AddSyncedFile(f *SyncedFile) error {
-	_, err := d.db.Exec(
-		`INSERT OR IGNORE INTO synced_files 
+// AddSyncedFile records a successfully synced file and reports whether a new
+// row was inserted. A concurrent duplicate is not treated as an error.
+func (d *DB) AddSyncedFile(f *SyncedFile) (bool, error) {
+	result, err := d.db.Exec(
+		`INSERT INTO synced_files
 		 (content_hash, original_name, date_taken, local_path, file_size, media_type, device_id, synced_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(content_hash, device_id) DO NOTHING`,
 		f.ContentHash, f.OriginalName, f.DateTaken, f.LocalPath,
 		f.FileSize, f.MediaType, f.DeviceID, time.Now(),
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
 }
 
 // GetSyncStats returns the total count and size of synced files.

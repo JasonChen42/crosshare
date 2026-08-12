@@ -8,29 +8,35 @@
 
 ```
 手机 (Android)                    电脑 (Linux/Windows)
-┌──────────────────┐             ┌──────────────────────┐
-│  MediaStore Scan │             │  HTTP API             │
-│  SHA-256 Hash    │             │  /api/pair            │
-│  Manual Sync     │────────────►│  /api/synced          │
-│                  │  上传媒体 → │  /api/media/upload/*  │
-│  AudioRecord     │────────────►│  /api/audio/stream    │
-│                  │  上传语音 → │                      │
-│  Jetpack Compose │             │  File Organizer       │
-└──────────────────┘             │  YYYY/YYYY-MM-DD/     │
-                                 │  Local Web UI         │
-                                 │  SQLite DB            │
-                                 └──────────────────────┘
+┌──────────────────┐             ┌──────────────────────────┐
+│  MediaStore Scan │             │  HTTP API                │
+│  SHA-256 Hash    │             │  /api/pair               │
+│  Manual Sync     │────────────►│  /api/synced             │
+│                  │  上传媒体 → │  /api/media/upload/*     │
+│  AudioRecord     │────────────►│  /api/audio/stream       │
+│                  │  上传语音 → │                          │
+│  Jetpack Compose │             │  File Organizer          │
+└──────────────────┘             │  YYYY/YYYY-MM-DD/        │
+                                 │  Local Web UI            │
+                                 │  SQLite DB               │
+                                 │                          │
+                                 │  STT Engine (Docker)     │
+                                 │  Qwen3-ASR / sherpa-onnx │
+                                 │  ws://127.0.0.1:8013     │
+                                 └──────────────────────────┘
 ```
 
 ## 功能特性
 
 - 📷 **照片+视频同步** — Android 端扫描 MediaStore，手动推送未同步文件
 - 🎙️ **手机语音输入** — Android 端检测语音片段并上传到桌面端保存为 WAV
+- 🤖 **实时语音识别** — Qwen3-ASR-1.7B GPU 推理，支持 30+ 语言和 22 种中文方言
 - 📁 **日期归档** — 按 `YYYY/YYYY-MM-DD/` 目录结构自动整理
 - 🔑 **配对认证** — 6位配对码 + API Token，配对失败会限流
 - 👨‍👩‍👧‍👦 **多设备支持** — 支持多台手机同步到一台电脑
 - 🖥️ **系统托盘 / 本机 Web UI** — 桌面端可托盘运行，也可作为 systemd user service 常驻
 - 🔄 **内容去重** — 基于 SHA-256 哈希，不会重复同步
+- 🔀 **引擎热切换** — 改一个环境变量即可在 Qwen3-ASR 和 sherpa-onnx 之间切换
 
 ## 桌面端 (Go)
 
@@ -70,7 +76,7 @@ make install-autostart
 - 本机 UI：`http://127.0.0.1:8384/`
 - 查看状态：`systemctl --user status crosshare.service`
 - 查看日志：`journalctl --user -u crosshare.service -f`
-- 语音服务：默认通过 `localman --speech start --json` 自动拉起，并在 UI 中显示状态
+- 语音服务：默认通过 `localman --speech start --json` 自动拉起 Qwen3-ASR-1.7B（GPU 推理），支持引擎热切换。详见 [`docs/speech/`](docs/speech/)
 
 安装脚本会尝试启用 systemd linger，让服务在 Linux 开机后、用户未登录时也能自动启动。如果系统拒绝自动启用，可手动运行：
 
@@ -86,7 +92,7 @@ loginctl enable-linger "$USER"
 
 ### 一键启动语音输入
 
-项目自带独立语音输入命令，用于同时启动 CrossHare 后端、语音识别服务和当前光标文本注入：
+项目自带独立语音输入命令，用于同时启动 CrossHare 后端、语音识别服务（Qwen3-ASR 或 sherpa-onnx）和当前光标文本注入：
 
 ```bash
 cd desktop
@@ -104,7 +110,7 @@ voiced logs
 启动流程会：
 
 1. 构建并安装 `~/.local/bin/crosshare`
-2. 执行 `localman --speech start --json`
+2. 执行 `localman --speech start --json` 拉起 STT 容器（stt-realtime + stt-offline）
 3. 为 `crosshare.service` 写入 `CROSSHARE_TEXT_INJECT=1` 和 `CROSSHARE_TEXT_INJECT_MODE=portal-unicode`
 4. 重启用户级 systemd 服务
 
@@ -113,14 +119,35 @@ voiced logs
 实时语音识别默认连接：
 
 ```text
-ws://127.0.0.1:8000/v1/audio/realtime
+ws://127.0.0.1:8013/v1/audio/realtime
 ```
+
+可通过环境变量切换引擎或连接地址：
+
+```bash
+# 使用 Qwen3-ASR（默认）
+CROSSHARE_TRANSCRIPT_WS=ws://127.0.0.1:8013/v1/audio/realtime
+
+# 切回 sherpa-onnx
+CROSSHARE_TRANSCRIPT_WS=ws://127.0.0.1:8013/v1/audio/realtime  # 引擎由 STT 端 SPEECH_REALTIME_ENGINE 控制
+```
+
+详细配置和引擎切换请参考 [`docs/speech/`](docs/speech/)。
 
 如果不想让 CrossHare 启动时自动拉起本机语音服务，可以设置：
 
 ```bash
 CROSSHARE_SPEECH_AUTOSTART=0 ./crosshare --no-tray
 ```
+
+后端默认限制单个媒体文件为 20 GiB、单段音频为 64 MiB。可以按部署需要调整：
+
+```bash
+CROSSHARE_MAX_MEDIA_BYTES=21474836480
+CROSSHARE_MAX_AUDIO_BYTES=67108864
+```
+
+旧版桌面端通过 mDNS 主动从手机拉取媒体的路径默认关闭；只有维护旧客户端时才应在可信网络显式设置 `CROSSHARE_LEGACY_PULL_SYNC=1`。
 
 首次运行会：
 1. 在 `~/.crosshare/` 创建配置文件
@@ -149,7 +176,7 @@ CROSSHARE_SPEECH_AUTOSTART=0 ./crosshare --no-tray
 
 - **状态** — 显示当前同步状态
 - **配对码** — 在手机端输入此码完成配对
-- **立即同步** — 手动触发一次同步
+- **旧版拉取同步** — 仅在显式启用 `CROSSHARE_LEGACY_PULL_SYNC=1` 时显示
 - **打开同步文件夹** — 在文件管理器中打开
 - **退出** — 退出 CrossHare
 
@@ -187,6 +214,8 @@ CrossHare 目前面向可信局域网使用，不适合直接暴露到公网。
 
 - 桌面端 HTTP API 默认监听局域网地址，Android 端通过明文 HTTP 连接。请只在可信 WiFi 下使用。
 - 配对需要桌面端显示的 6 位配对码；配对成功后使用随机 API Token 认证，配对失败会按来源 IP 限流。
+- 媒体上传必须声明大小，桌面端会重新计算并验证 SHA-256；同名并发上传使用原子落盘，不会互相覆盖。
+- 旧版 mDNS 拉取会把 Token 发给局域网发现的设备，因此默认关闭；当前支持的同步方式是 Android 主动推送。
 - 桌面端本机 UI 的敏感状态接口仅允许 loopback 访问。
 - 桌面端配置目录和 `config.json` 使用私有权限保存；Android 端禁用系统备份，避免配对 token 进入备份。
 - 可选语音识别和 Wayland 文本注入依赖本机 `localman --speech` 与 GNOME Remote Desktop portal 授权。
@@ -198,8 +227,16 @@ CrossHare 目前面向可信局域网使用，不适合直接暴露到公网。
 | 桌面端 | Go, fyne.io/systray, grandcat/zeroconf, modernc.org/sqlite |
 | Android | Kotlin, Jetpack Compose, NsdManager, Room, WorkManager |
 | 当前同步协议 | Android 主动推送到桌面端 HTTP API |
+| 语音识别 | Qwen3-ASR-1.7B / sherpa-onnx, Docker, Python FastAPI, PyTorch |
+| 模型管理 | localman (llm-runtime-manager), Docker Compose |
 | 实验/历史代码 | mDNS/DNS-SD (`_crosshare._tcp`), Android embedded HTTP server |
 | 去重 | SHA-256 content hash |
+
+## 文档
+
+- [`docs/speech/architecture.md`](docs/speech/architecture.md) — 语音识别流水线架构
+- [`docs/speech/qwen3-asr.md`](docs/speech/qwen3-asr.md) — Qwen3-ASR-1.7B 集成指南
+- [`docs/speech/model-management.md`](docs/speech/model-management.md) — localman 模型管理
 
 ## License
 

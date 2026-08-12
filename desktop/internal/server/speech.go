@@ -82,7 +82,7 @@ func (s *Server) speechStatus() speechStatus {
 	}
 
 	status.LastCheckedAt = time.Now().Format(time.RFC3339)
-	status.Ready = strings.EqualFold(status.Status, "ready") && status.serviceRunning("gateway") && status.serviceRunning("stt-realtime")
+	status.Ready = status.isReady()
 
 	s.speechMu.Lock()
 	state := s.speechState
@@ -100,6 +100,10 @@ func (s speechStatus) serviceRunning(name string) bool {
 	}
 	service, ok := s.Services[name]
 	return ok && service.Running
+}
+
+func (s speechStatus) isReady() bool {
+	return strings.EqualFold(s.Status, "ready") && s.serviceRunning("stt-realtime")
 }
 
 var errLocalmanUnavailable = errors.New("localman command is unavailable")
