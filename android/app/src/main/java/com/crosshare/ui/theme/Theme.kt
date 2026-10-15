@@ -13,7 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
-private val DarkColorScheme = darkColorScheme(
+private val PhotoColorScheme = lightColorScheme(
     primary = Primary,
     onPrimary = Color.White,
     primaryContainer = PrimaryDark,
@@ -69,7 +69,7 @@ val CrossHareTypography = Typography(
 
 @Composable
 fun CrossHareTheme(content: @Composable () -> Unit) {
-    val colorScheme = DarkColorScheme
+    val colorScheme = PhotoColorScheme
 
     val view = LocalView.current
     if (!view.isInEditMode) {
@@ -77,7 +77,7 @@ fun CrossHareTheme(content: @Composable () -> Unit) {
             val window = (view.context as Activity).window
             window.statusBarColor = SurfaceDark.toArgb()
             window.navigationBarColor = SurfaceDark.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
         }
     }
 

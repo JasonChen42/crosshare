@@ -5,19 +5,20 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * Represents a media file (photo or video) tracked by CrossHare.
- * The content_hash is computed as SHA-256 of the file bytes.
+ * Represents a media file (photo or video) tracked by CrossHare. The content_hash is computed as
+ * SHA-256 of the file bytes.
  */
 @Entity(
     tableName = "media_items",
-    indices = [
-        Index(value = ["contentHash"], unique = true),
-        Index(value = ["mediaStoreId"], unique = true)
-    ]
+    indices =
+        [
+            Index(value = ["contentHash"], unique = true),
+        Index(value = ["dateTaken", "id"]),
+            Index(value = ["mediaStoreId", "mediaType"], unique = true),
+        ],
 )
 data class MediaEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
 
     /** MediaStore ID for this file */
     val mediaStoreId: Long,
@@ -47,5 +48,6 @@ data class MediaEntity(
     val synced: Boolean = false,
 
     /** When the hash was computed (epoch millis) */
-    val indexedAt: Long = System.currentTimeMillis()
+    val indexedAt: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "0") val modifiedAt: Long = 0,
 )

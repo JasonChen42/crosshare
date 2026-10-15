@@ -21,7 +21,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.crosshare.service.AudioStreamService
 import com.crosshare.service.SyncService
-import com.crosshare.ui.screens.HomeScreen
+import com.crosshare.ui.screens.PhotoHomeScreen
 import com.crosshare.ui.screens.PairScreen
 import com.crosshare.ui.screens.SettingsScreen
 import com.crosshare.ui.theme.CrossHareTheme
@@ -78,10 +78,14 @@ class MainActivity : ComponentActivity() {
     private val mediaPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.all { it.value }
-        if (allGranted) {
-            startSyncService()
-        } else {
+        val mediaGranted = if (Build.VERSION.SDK_INT >= 33) {
+            checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+                (Build.VERSION.SDK_INT >= 34 && checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED)
+        } else checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        // Receiving app-owned images does not require broad gallery permission.
+        startSyncService()
+        if (!mediaGranted) {
             Toast.makeText(this, "需要媒体访问权限才能同步照片", Toast.LENGTH_LONG).show()
         }
     }
@@ -89,7 +93,7 @@ class MainActivity : ComponentActivity() {
     private val audioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.all { it.value }
+        val allGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (allGranted) {
             startAudioService()
         } else {
@@ -135,7 +139,7 @@ class MainActivity : ComponentActivity() {
 
                 NavHost(navController = navController, startDestination = "home") {
                     composable("home") {
-                        HomeScreen(
+                        PhotoHomeScreen(
                             serviceState = serviceState,
                             audioState = audioState,
                             pairedComputerName = pairedComputerName,
@@ -144,7 +148,7 @@ class MainActivity : ComponentActivity() {
                             onStartAudio = { checkAudioPermissionAndStart() },
                             onStopAudio = { stopAudioService() },
                             onRescan = { syncService?.rescan() },
-                            onSyncNow = { syncService?.syncNow() },
+                            onUpload = { hashes -> syncService?.uploadSelected(hashes) },
                             onNavigateToSettings = { navController.navigate("settings") }
                         )
                     }
@@ -187,6 +191,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onUnpair = {
+                                stopSyncService()
+                                stopAudioService()
+                                getSharedPreferences("crosshare_transfers", Context.MODE_PRIVATE).edit().clear().commit()
                                 prefs.edit()
                                     .remove("paired_token")
                                     .remove("paired_computer_name")
@@ -234,6 +241,7 @@ class MainActivity : ComponentActivity() {
             // Android 13+
             if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (Build.VERSION.SDK_INT >= 34) permissions.add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
             }
             if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.READ_MEDIA_VIDEO)

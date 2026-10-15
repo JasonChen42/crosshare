@@ -2,33 +2,33 @@ package com.crosshare.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Primary palette - deep blue/teal tones
-val Primary = Color(0xFF0EA5E9)        // Sky blue
-val PrimaryDark = Color(0xFF0284C7)
-val PrimaryLight = Color(0xFF7DD3FC)
+// Photo workspace palette: neutral surfaces and a restrained green accent.
+val Primary = Color(0xFF24634D)
+val PrimaryDark = Color(0xFF174734)
+val PrimaryLight = Color(0xFFD9E9DF)
 
 // Secondary palette
-val Secondary = Color(0xFF06B6D4)      // Cyan
-val SecondaryDark = Color(0xFF0891B2)
+val Secondary = Color(0xFF24634D)
+val SecondaryDark = Color(0xFFD9E9DF)
 
 // Surface colors
-val SurfaceDark = Color(0xFF0F172A)    // Slate 900
-val SurfaceMedium = Color(0xFF1E293B)  // Slate 800
-val SurfaceLight = Color(0xFF334155)   // Slate 700
-val SurfaceCard = Color(0xFF1E293B)
+val SurfaceDark = Color(0xFFFAFAF7)
+val SurfaceMedium = Color(0xFFFFFFFF)
+val SurfaceLight = Color(0xFFEEEFEA)
+val SurfaceCard = Color(0xFFFFFFFF)
 
 // Accent colors
-val Success = Color(0xFF22C55E)        // Green 500
-val Warning = Color(0xFFF59E0B)        // Amber 500
-val Error = Color(0xFFEF4444)          // Red 500
-val Info = Color(0xFF3B82F6)           // Blue 500
+val Success = Color(0xFF24634D)
+val Warning = Color(0xFF966500)
+val Error = Color(0xFFB3261E)
+val Info = Color(0xFF365F89)
 
 // Text colors
-val TextPrimary = Color(0xFFE2E8F0)    // Slate 200
-val TextSecondary = Color(0xFF94A3B8)  // Slate 400
-val TextMuted = Color(0xFF64748B)      // Slate 500
+val TextPrimary = Color(0xFF25332B)
+val TextSecondary = Color(0xFF536159)
+val TextMuted = Color(0xFF5D695F)
 
 // Status indicator colors
-val StatusOnline = Color(0xFF22C55E)
+val StatusOnline = Color(0xFF24634D)
 val StatusOffline = Color(0xFF6B7280)
-val StatusSyncing = Color(0xFF0EA5E9)
+val StatusSyncing = Color(0xFF24634D)

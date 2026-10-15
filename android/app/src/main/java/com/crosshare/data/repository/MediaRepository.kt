@@ -9,15 +9,13 @@ import android.util.Log
 import com.crosshare.data.db.AppDatabase
 import com.crosshare.data.db.MediaDao
 import com.crosshare.data.db.MediaEntity
+import java.io.InputStream
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import java.io.InputStream
-import java.security.MessageDigest
 
-/**
- * Repository that scans MediaStore for photos/videos and computes SHA-256 hashes.
- */
+/** Repository that scans MediaStore for photos/videos and computes SHA-256 hashes. */
 class MediaRepository(private val context: Context) {
 
     private val dao: MediaDao = AppDatabase.getInstance(context).mediaDao()
@@ -27,57 +25,69 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getAllMedia(): Flow<List<MediaEntity>> = dao.getAllMedia()
+
     fun getUnsyncedMedia(): Flow<List<MediaEntity>> = dao.getUnsyncedMedia()
+
     suspend fun getUnsyncedItems(): List<MediaEntity> = dao.getUnsyncedItems()
 
     suspend fun getAllHashes(): List<String> = dao.getAllHashes()
+
     suspend fun getTotalCount(): Int = dao.getTotalCount()
+
     suspend fun getSyncedCount(): Int = dao.getSyncedCount()
+
     suspend fun getSyncedSize(): Long = dao.getSyncedSize()
+
     suspend fun getByHash(hash: String): MediaEntity? = dao.getByHash(hash)
+
     suspend fun markSynced(hash: String) = dao.markSynced(hash)
+
     suspend fun markSyncedBatch(hashes: List<String>) = dao.markSyncedBatch(hashes)
 
     /**
-     * Scans MediaStore for all photos and videos, computes SHA-256 hashes for new ones,
-     * and inserts them into the local database.
-     * Returns the number of newly indexed items.
+     * Scans MediaStore for all photos and videos, computes SHA-256 hashes for new ones, and inserts
+     * them into the local database. Returns the number of newly indexed items.
      */
-    suspend fun scanAndIndex(): Int = withContext(Dispatchers.IO) {
-        var newCount = 0
+    suspend fun scanAndIndex(): Int =
+        withContext(Dispatchers.IO) {
+            var newCount = 0
 
-        // Scan photos
-        newCount += scanMedia(
-            uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            mediaType = "photo"
-        )
+            // Scan photos
+            try {
+                newCount += scanMedia(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "photo")
+            } catch (_: SecurityException) {
+                /* Gallery permission may be revoked at any time. */
+            }
 
-        // Scan videos
-        newCount += scanMedia(
-            uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            mediaType = "video"
-        )
+            // Scan videos
+            try {
+                newCount += scanMedia(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video")
+            } catch (_: SecurityException) {
+                /* App-owned downloads remain readable where supported. */
+            }
 
-        Log.i(TAG, "Scan complete: $newCount new items indexed")
-        newCount
-    }
+            Log.i(TAG, "Scan complete: $newCount new items indexed")
+            newCount
+        }
 
     private suspend fun scanMedia(uri: Uri, mediaType: String): Int {
         var newCount = 0
 
-        val projection = arrayOf(
-            MediaStore.MediaColumns._ID,
-            MediaStore.MediaColumns.DISPLAY_NAME,
-            MediaStore.MediaColumns.DATA,
-            MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.MIME_TYPE,
-            MediaStore.MediaColumns.DATE_TAKEN,
-            MediaStore.MediaColumns.DATE_MODIFIED,
-        )
+        val projection =
+            arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.DATA,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.MIME_TYPE,
+                MediaStore.MediaColumns.DATE_TAKEN,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+            )
 
         val sortOrder = "${MediaStore.MediaColumns.DATE_TAKEN} DESC"
 
         context.contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
+            val validIds = mutableListOf<Long>()
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val dataCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
@@ -89,8 +99,15 @@ class MediaRepository(private val context: Context) {
             while (cursor.moveToNext()) {
                 val mediaStoreId = cursor.getLong(idCol)
 
-                // Skip if already indexed
-                if (dao.getByMediaStoreId(mediaStoreId) != null) continue
+                validIds.add(mediaStoreId)
+                val previous = dao.getByMediaStoreId(mediaStoreId, mediaType)
+                val modifiedAt = cursor.getLong(dateModCol)
+                if (
+                    previous != null &&
+                        previous.modifiedAt == modifiedAt &&
+                        previous.fileSize == cursor.getLong(sizeCol)
+                )
+                    continue
 
                 val fileName = cursor.getString(nameCol) ?: "unknown"
                 val filePath = cursor.getString(dataCol) ?: ""
@@ -105,17 +122,21 @@ class MediaRepository(private val context: Context) {
                 val contentUri = ContentUris.withAppendedId(uri, mediaStoreId)
                 val hash = computeHash(contentUri) ?: continue
 
-                val entity = MediaEntity(
-                    mediaStoreId = mediaStoreId,
-                    contentHash = hash,
-                    fileName = fileName,
-                    filePath = filePath,
-                    fileSize = fileSize,
-                    mimeType = mimeType,
-                    mediaType = mediaType,
-                    dateTaken = dateTaken
-                )
+                val entity =
+                    MediaEntity(
+                        mediaStoreId = mediaStoreId,
+                        contentHash = hash,
+                        fileName = fileName,
+                        filePath = filePath,
+                        fileSize = fileSize,
+                        mimeType = mimeType,
+                        mediaType = mediaType,
+                        dateTaken = dateTaken,
+                        modifiedAt = modifiedAt,
+                        synced = previous?.contentHash == hash && previous.synced,
+                    )
 
+                if (previous != null) dao.deleteById(previous.id)
                 dao.insert(entity)
                 newCount++
 
@@ -123,14 +144,18 @@ class MediaRepository(private val context: Context) {
                     Log.d(TAG, "Indexed $newCount $mediaType items so far...")
                 }
             }
+            // Prune only after a successful query. Never infer remote deletion.
+            val valid = validIds.toHashSet()
+            dao.idsForType(mediaType)
+                .filterNot { it in valid }
+                .chunked(500)
+                .forEach { dao.deleteTypeIds(mediaType, it) }
         }
 
         return newCount
     }
 
-    /**
-     * Computes SHA-256 hash of a content URI.
-     */
+    /** Computes SHA-256 hash of a content URI. */
     private fun computeHash(contentUri: Uri): String? {
         return try {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -151,36 +176,38 @@ class MediaRepository(private val context: Context) {
     }
 
     /**
-     * Opens an InputStream for the given content hash.
-     * Used by the HTTP server to serve files to the desktop.
+     * Opens an InputStream for the given content hash. Used by the HTTP server to serve files to
+     * the desktop.
      */
     @SuppressLint("Recycle")
-    suspend fun openInputStream(hash: String): InputStream? = withContext(Dispatchers.IO) {
-        val entity = dao.getByHash(hash) ?: return@withContext null
+    suspend fun openInputStream(hash: String): InputStream? =
+        withContext(Dispatchers.IO) {
+            val entity = dao.getByHash(hash) ?: return@withContext null
 
-        val uri = when (entity.mediaType) {
-            "photo" -> ContentUris.withAppendedId(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                entity.mediaStoreId
-            )
-            "video" -> ContentUris.withAppendedId(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                entity.mediaStoreId
-            )
-            else -> return@withContext null
+            val uri =
+                when (entity.mediaType) {
+                    "photo" ->
+                        ContentUris.withAppendedId(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            entity.mediaStoreId,
+                        )
+                    "video" ->
+                        ContentUris.withAppendedId(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            entity.mediaStoreId,
+                        )
+                    else -> return@withContext null
+                }
+
+            try {
+                context.contentResolver.openInputStream(uri)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to open $uri: ${e.message}")
+                null
+            }
         }
 
-        try {
-            context.contentResolver.openInputStream(uri)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to open $uri: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * Returns the file size for a given hash.
-     */
+    /** Returns the file size for a given hash. */
     suspend fun getFileSize(hash: String): Long {
         return dao.getByHash(hash)?.fileSize ?: 0
     }
