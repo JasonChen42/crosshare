@@ -42,6 +42,8 @@ type Server struct {
 	audioReceiver *audio.Receiver
 	server        *http.Server
 	pairLimiter   *pairLimiter
+	uploadLocks   [64]sync.Mutex
+	libraryMu     sync.Mutex
 	speechMu      sync.Mutex
 	speechState   speechRuntimeState
 }
@@ -80,7 +82,9 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 	mux := http.NewServeMux()
 
 	// Local browser UI.
-	mux.HandleFunc("GET /", s.handleUI)
+	s.registerLibrary(mux)
+	mux.HandleFunc("GET /", s.handleLibraryUI)
+	mux.HandleFunc("GET /voice", s.handleUI)
 	mux.HandleFunc("GET /api/ui/status", s.localOnly(s.handleUIStatus))
 
 	// Public endpoints (no auth required)
@@ -435,6 +439,11 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Serialize equal-content uploads, including imports from different devices.
+	stripe, _ := strconv.ParseUint(hash[:2], 16, 8)
+	s.uploadLocks[stripe%64].Lock()
+	defer s.uploadLocks[stripe%64].Unlock()
 
 	if has, err := s.db.HasFile(hash); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check synced file"})

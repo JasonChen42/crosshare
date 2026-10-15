@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>CrossHare · 照片库</title>
+    <link rel="stylesheet" href="/library-assets/library.css" />
+    <script defer src="/library-assets/library.js"></script>
+    <script defer src="/library-assets/folder-import.js"></script>
+  </head>
+  <body>
+    <aside>
+      <a class="brand" href="/">CrossHare<span>你的照片，在一起。</span></a>
+      <nav aria-label="主导航">
+        <button data-view="photos" aria-current="page">▦　照片库</button
+        ><button data-view="favorites">♡　收藏</button
+        ><button data-view="albums">▣　相册</button
+        ><button data-view="transfers">⇄　传输</button
+        ><button data-view="devices">▱　设备</button
+        ><a href="/voice">♩　语音</a>
+      </nav>
+      <div class="aside-note">
+        原图保存在这台电脑<br />发送后，手机也可离线查看。
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">CROSSHARE / PERSONAL LIBRARY</p>
+          <h1 id="heading">照片库</h1>
+          <p id="subtitle">手机与电脑的照片，在这里汇合。</p>
+        </div>
+        <div class="import-actions">
+          <button id="import-folders">导入文件夹</button
+          ><button class="primary" id="import">＋ 导入图片</button>
+        </div>
+        <input
+          hidden
+          id="files"
+          type="file"
+          accept="image/*,video/*"
+          multiple
+        />
+      </header>
+      <div id="message" role="status" aria-live="polite"></div>
+      <section id="photo-panel">
+        <div class="toolbar">
+          <input
+            id="search"
+            type="search"
+            placeholder="搜索文件名"
+            aria-label="搜索文件名"
+          /><button id="refresh">刷新</button><span id="count"></span>
+        </div>
+        <nav class="pagination" aria-label="照片分页">
+          <button id="page-prev">上一页</button
+          ><span id="page-label" aria-live="polite"></span
+          ><button id="page-next">下一页</button>
+          <label
+            >每页
+            <select id="page-size">
+              <option value="24">24</option>
+              <option value="48" selected>48</option>
+              <option value="96">96</option>
+            </select></label
+          >
+          <form id="page-form">
+            <label
+              >跳到
+              <input
+                id="page-number"
+                type="number"
+                min="1"
+                value="1"
+                aria-label="页码" /></label
+            ><button>前往</button>
+          </form>
+        </nav>
+        <div class="selection" id="selection" hidden>
+          <span id="selected-count"></span
+          ><select id="device" aria-label="目标手机"></select
+          ><button id="send">发送到手机</button
+          ><select id="album" aria-label="目标相册"></select
+          ><button id="add-album">加入相册</button
+          ><button id="clear">取消选择</button>
+        </div>
+        <div id="grid" class="grid" aria-label="照片"></div>
+        <div id="empty" class="empty" hidden>
+          <span class="empty-symbol">▧</span>
+          <h2>让第一张照片来到这里</h2>
+          <p>
+            拖入电脑上的图片，或在手机中选择照片上传。<br />原图会保存在电脑，随时可以发回手机。
+          </p>
+          <button id="empty-import">导入图片</button>
+        </div>
+      </section>
+      <section id="other-panel" hidden></section>
+      <footer>CrossHare <span>本机照片库 · 原图传输</span></footer>
+    </main>
+    <dialog id="viewer">
+      <div class="viewer-toolbar">
+        <span id="viewer-name"></span
+        ><button id="close" aria-label="关闭预览">关闭 ×</button>
+      </div>
+      <div id="viewer-media"></div>
+      <div class="viewer-toolbar">
+        <button id="previous">← 上一张</button
+        ><button id="favorite">收藏</button><a id="download">下载原图</a
+        ><button id="next">下一张 →</button>
+      </div>
+      <p id="viewer-info"></p>
+    </dialog>
+    <input id="folders" type="file" webkitdirectory multiple hidden />
+    <dialog id="import-dialog" aria-labelledby="import-heading">
+      <h2 id="import-heading">导入文件与文件夹</h2>
+      <p>
+        可以反复添加文件夹，或一次拖入多个文件夹。包含子目录的图片和视频；其他文件会跳过。
+      </p>
+      <div class="import-actions">
+        <button id="add-folders">＋ 添加文件夹</button
+        ><button id="add-files">＋ 添加图片</button>
+      </div>
+      <label
+        >导入位置
+        <select id="import-mode">
+          <option value="folders">按顶层文件夹创建相册（同名合并）</option>
+          <option value="current">加入当前相册</option>
+          <option value="library">仅导入照片库</option>
+        </select></label
+      >
+      <p id="import-destination"></p>
+      <div id="import-summary" role="status" aria-live="polite"></div>
+      <ul id="import-groups"></ul>
+      <div id="import-errors" role="alert"></div>
+      <div class="import-actions">
+        <button id="clear-import">清空队列</button
+        ><button id="close-import">关闭</button
+        ><button id="stop-import" hidden>暂停导入</button
+        ><button class="primary" id="start-import">开始导入</button>
+      </div>
+    </dialog>
+    <dialog id="album-dialog">
+      <form id="album-form">
+        <h2>新建相册</h2>
+        <label
+          >相册名称<input
+            id="album-name"
+            required
+            maxlength="80"
+            autocomplete="off"
+        /></label>
+        <div class="toolbar">
+          <button type="button" id="cancel-album">取消</button
+          ><button class="primary" type="submit">创建</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

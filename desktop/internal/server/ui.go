@@ -31,7 +31,7 @@ func (s *Server) localOnly(next http.HandlerFunc) http.HandlerFunc {
 
 // handleUI serves the simple local browser UI.
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	if r.URL.Path != "/" && r.URL.Path != "/voice" {
 		http.NotFound(w, r)
 		return
 	}
@@ -309,7 +309,7 @@ var uiTemplate = template.Must(template.New("ui").Parse(`<!doctype html>
   <main>
     <header>
       <div>
-        <h1>CrossHare</h1>
+        <h1>CrossHare · 语音</h1><a href="/">← 返回照片库</a>
         <div class="muted">电脑接收端正在运行</div>
       </div>
     </header>

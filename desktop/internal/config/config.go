@@ -71,6 +71,9 @@ func DefaultConfig() *Config {
 
 // ConfigDir returns the platform-specific config directory.
 func ConfigDir() string {
+	if dir := os.Getenv("CROSSHARE_DATA_DIR"); dir != "" {
+		return dir
+	}
 	switch runtime.GOOS {
 	case "windows":
 		appData := os.Getenv("APPDATA")

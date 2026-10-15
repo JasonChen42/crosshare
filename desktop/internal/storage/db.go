@@ -166,7 +166,7 @@ func (d *DB) migrate() error {
 		}
 	}
 
-	return nil
+	return d.migrateLibrary()
 }
 
 // HasFile checks if a file with the given content hash has already been synced.

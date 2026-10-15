@@ -21,6 +21,7 @@ import (
 
 func main() {
 	noTrayFlag := flag.Bool("no-tray", false, "run without the system tray UI")
+	portFlag := flag.Int("port", 0, "override HTTP port for this run")
 	flag.Parse()
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
@@ -30,6 +31,9 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+	if *portFlag > 0 {
+		cfg.HTTPPort = *portFlag
 	}
 	log.Printf("Config loaded. Target folder: %s", cfg.GetTargetFolder())
 	log.Printf("Pair code: %s", cfg.GetPairCode())
@@ -71,7 +75,7 @@ func main() {
 	_, cancel := context.WithCancel(context.Background())
 
 	log.Printf("HTTP server listening on %s", listener.Addr())
-	log.Printf("Running in receive-only mode; phones push media to this computer")
+	log.Printf("Photo library ready; phones can upload and receive originals")
 
 	// Set up graceful shutdown
 	quit := make(chan struct{})
