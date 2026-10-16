@@ -12,12 +12,14 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +31,12 @@ import (
 
 //go:embed web/*
 var libraryWeb embed.FS
+
+// uiRequestKey marks requests served to the local browser UI, which may see
+// desktop file paths unlike the phone API.
+type uiRequestKeyType struct{}
+
+var uiRequestKey = uiRequestKeyType{}
 
 func (s *Server) registerLibrary(mux *http.ServeMux) {
 	mux.HandleFunc("GET /library-assets/{file}", func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +67,7 @@ func (s *Server) registerLibrary(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /api/library/transfers/{id}/ack", s.authMiddleware(s.libraryAck))
 	mux.HandleFunc("POST /api/ui/library/import", s.libraryLocal(s.libraryImport))
+	mux.HandleFunc("POST /api/ui/library/reveal/{hash}", s.libraryLocal(s.libraryReveal))
 	mux.HandleFunc("GET /api/ui/library/devices", s.libraryLocal(func(w http.ResponseWriter, r *http.Request) {
 		devices := []map[string]string{}
 		for _, d := range s.cfg.GetPairedDevices() {
@@ -94,7 +103,9 @@ func (s *Server) libraryLocal(next http.HandlerFunc) http.HandlerFunc {
 		}
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("Cache-Control", "no-store")
-		next(w, r)
+		// Local browser responses may expose desktop file paths; phone
+		// responses stay metadata-only.
+		next(w, r.WithContext(context.WithValue(r.Context(), uiRequestKey, true)))
 	})
 }
 func decodeLibrary(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -128,6 +139,12 @@ func (s *Server) libraryList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "cannot read library", 500)
 		return
+	}
+	if r.Context().Value(uiRequestKey) == nil {
+		// Phones get metadata only; desktop file paths stay on this machine.
+		for i := range items {
+			items[i].LocalPath = ""
+		}
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "next_offset": offset + len(items), "has_more": offset+len(items) < total, "total": total, "limit": limit})
 }
@@ -354,7 +371,7 @@ func (s *Server) libraryImport(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("X-CrossHare-Date-Taken-Ms", fmt.Sprint(time.Now().UnixMilli()))
 	}
 	r.Body = io.NopCloser(tmp)
-	r = r.WithContext(context.WithValue(r.Context(), "device", &config.PairedDevice{DeviceID: "desktop", DeviceName: s.cfg.DeviceName}))
+	r = r.WithContext(context.WithValue(r.Context(), "device", &config.PairedDevice{DeviceID: desktopImportDeviceID, DeviceName: s.cfg.DeviceName}))
 	reply := &importReply{header: make(http.Header)}
 	s.handleMediaUpload(reply, r)
 	if reply.status >= 200 && reply.status < 300 && albumID > 0 {
@@ -394,6 +411,52 @@ func (r *importReply) Write(data []byte) (int, error) {
 		r.status = 200
 	}
 	return r.body.Write(data)
+}
+
+// libraryReveal shows the asset's original file in the desktop file manager.
+// A browser cannot open a folder itself, so the loopback server performs the
+// desktop open on its behalf.
+func (s *Server) libraryReveal(w http.ResponseWriter, r *http.Request) {
+	hash, err := media.NormalizeSHA256(r.PathValue("hash"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := s.db.LibraryAsset(hash)
+	if err != nil {
+		http.Error(w, "cannot read asset", 500)
+		return
+	}
+	if f == nil || f.LocalPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if info, err := os.Stat(f.LocalPath); err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	name, args := revealCommand(runtime.GOOS, f.LocalPath)
+	if err := s.reveal(name, args...); err != nil {
+		log.Printf("[server] failed to reveal %s: %v", f.LocalPath, err)
+		http.Error(w, "cannot open folder", 500)
+		return
+	}
+	log.Printf("[server] revealed %s", f.LocalPath)
+	writeJSON(w, 200, map[string]any{"ok": true, "path": f.LocalPath})
+}
+
+// revealCommand builds the platform command that shows a local file in its
+// folder: Finder reveals the file itself, Explorer selects it, and the Linux
+// fallback opens the containing folder.
+func revealCommand(goos, path string) (string, []string) {
+	switch goos {
+	case "darwin":
+		return "open", []string{"-R", path}
+	case "windows":
+		return "explorer", []string{"/select," + path}
+	default:
+		return "xdg-open", []string{filepath.Dir(path)}
+	}
 }
 func (s *Server) librarySendAlbum(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

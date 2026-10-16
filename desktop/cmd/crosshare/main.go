@@ -75,7 +75,7 @@ func main() {
 	_, cancel := context.WithCancel(context.Background())
 
 	log.Printf("HTTP server listening on %s", listener.Addr())
-	log.Printf("Photo library ready; phones can upload and receive originals")
+	log.Printf("Photo library ready: http://127.0.0.1:%d/ (phones upload and receive originals)", cfg.HTTPPort)
 
 	// Set up graceful shutdown
 	quit := make(chan struct{})

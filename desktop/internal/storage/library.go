@@ -15,7 +15,7 @@ type LibraryItem struct {
 	Kind      string    `json:"kind"`
 	Source    string    `json:"source"`
 	Favorite  bool      `json:"favorite"`
-	LocalPath string    `json:"-"`
+	LocalPath string    `json:"local_path,omitempty"`
 }
 type Transfer struct {
 	ID        int64  `json:"id"`

@@ -11,6 +11,8 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -162,6 +164,129 @@ func TestLibraryPaginationHasExactTotalsAndBounds(t *testing.T) {
 	filtered, total, _ := call("?q=photo-099")
 	if len(filtered) != 1 || total != 1 {
 		t.Fatal("filtered total mismatch")
+	}
+}
+
+func TestLibraryRevealsOriginalPathOnlyForLocalUI(t *testing.T) {
+	s, d, _ := testUploadServer(t)
+	s.cfg.PairedDevices = append(s.cfg.PairedDevices, *d)
+	var pngData bytes.Buffer
+	png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	importReq := httptest.NewRequest("POST", "http://127.0.0.1/api/ui/library/import", bytes.NewReader(pngData.Bytes()))
+	importReq.RemoteAddr = "127.0.0.1:9"
+	importReq.Header.Set("X-CrossHare-UI", "1")
+	importW := httptest.NewRecorder()
+	s.server.Handler.ServeHTTP(importW, importReq)
+	if importW.Code != 200 {
+		t.Fatal(importW.Body.String())
+	}
+	call := func(path, token string) []storage.LibraryItem {
+		r := httptest.NewRequest("GET", "http://127.0.0.1"+path, nil)
+		r.RemoteAddr = "127.0.0.1:9"
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+		var body struct {
+			Items []storage.LibraryItem `json:"items"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &body)
+		return body.Items
+	}
+	local := call("/api/ui/library", "")
+	if len(local) != 1 || local[0].LocalPath == "" {
+		t.Fatalf("local UI lost the original path: %+v", local)
+	}
+	remote := call("/api/library", "token")
+	if len(remote) != 1 || remote[0].LocalPath != "" {
+		t.Fatalf("phone response leaked a desktop path: %+v", remote)
+	}
+}
+
+func TestRevealOriginalOpensFolderForLocalUIOnly(t *testing.T) {
+	s, d, _ := testUploadServer(t)
+	s.cfg.PairedDevices = append(s.cfg.PairedDevices, *d)
+	rec := &recordingRunner{}
+	s.reveal = rec.run
+	var pngData bytes.Buffer
+	png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	importReq := httptest.NewRequest("POST", "http://127.0.0.1/api/ui/library/import", bytes.NewReader(pngData.Bytes()))
+	importReq.RemoteAddr = "127.0.0.1:9"
+	importReq.Header.Set("X-CrossHare-UI", "1")
+	importW := httptest.NewRecorder()
+	s.server.Handler.ServeHTTP(importW, importReq)
+	if importW.Code != 200 {
+		t.Fatal(importW.Body.String())
+	}
+	var imported struct {
+		Hash string `json:"hash"`
+	}
+	json.Unmarshal(importW.Body.Bytes(), &imported)
+	asset, err := s.db.LibraryAsset(imported.Hash)
+	if err != nil || asset == nil {
+		t.Fatalf("imported asset: %+v %v", asset, err)
+	}
+
+	post := func(path, host, origin, header, peer string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "http://"+host+path, nil)
+		r.RemoteAddr = peer
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		if header != "" {
+			r.Header.Set("X-CrossHare-UI", header)
+		}
+		w := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, r)
+		return w
+	}
+	revealPath := "/api/ui/library/reveal/" + imported.Hash
+	for _, reject := range []struct{ host, origin, header, peer string }{
+		{"127.0.0.1", "http://evil.example", "1", "127.0.0.1:3"},
+		{"127.0.0.1", "", "", "127.0.0.1:3"},
+		{"127.0.0.1", "", "1", "192.168.1.2:3"},
+	} {
+		if w := post(revealPath, reject.host, reject.origin, reject.header, reject.peer); w.Code != 403 {
+			t.Fatalf("%+v got %d", reject, w.Code)
+		}
+	}
+	if w := post("/api/ui/library/reveal/"+strings.Repeat("a", 64), "127.0.0.1", "", "1", "127.0.0.1:3"); w.Code != 404 {
+		t.Fatalf("missing asset: %d", w.Code)
+	}
+	w := post(revealPath, "127.0.0.1", "", "1", "127.0.0.1:3")
+	if w.Code != 200 {
+		t.Fatalf("reveal: %d %s", w.Code, w.Body.String())
+	}
+	calls := rec.all()
+	if len(calls) != 1 || calls[0][0] != "xdg-open" || calls[0][1] != filepath.Dir(asset.LocalPath) {
+		t.Fatalf("reveal command: %+v (want dir %s)", calls, filepath.Dir(asset.LocalPath))
+	}
+	var reply struct {
+		Path string `json:"path"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &reply)
+	if reply.Path != asset.LocalPath {
+		t.Fatalf("reply path %q", reply.Path)
+	}
+}
+
+func TestRevealCommandPerPlatform(t *testing.T) {
+	path := filepath.Join(string(filepath.Separator), "home", "u", "Pictures", "CrossHare", "2026", "a.jpg")
+	name, args := revealCommand("linux", path)
+	if name != "xdg-open" || len(args) != 1 || args[0] != filepath.Dir(path) {
+		t.Fatalf("linux reveal: %s %v", name, args)
+	}
+	name, args = revealCommand("darwin", path)
+	if name != "open" || len(args) != 2 || args[0] != "-R" || args[1] != path {
+		t.Fatalf("darwin reveal: %s %v", name, args)
+	}
+	name, args = revealCommand("windows", path)
+	if name != "explorer" || len(args) != 1 || args[0] != "/select,"+path {
+		t.Fatalf("windows reveal: %s %v", name, args)
 	}
 }
 

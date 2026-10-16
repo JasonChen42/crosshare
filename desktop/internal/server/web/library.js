@@ -175,6 +175,18 @@ async function loadChoices() {
   $("#album").replaceChildren(...albums.map((a) => new Option(a.name, a.id)));
   return d;
 }
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const field = document.createElement("input");
+    field.value = text;
+    document.body.append(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
+  }
+}
 async function switchView(next) {
   const navigation = ++navigationVersion;
   view = next;
@@ -301,6 +313,23 @@ function openViewer(index) {
   $("#viewer-name").textContent = f.name;
   $("#viewer-info").textContent =
     `${date(f.date)} · ${size(f.size)} · 电脑原图`;
+  const path = f.local_path || "";
+  const pathButton = $("#viewer-path");
+  pathButton.textContent = path || "原图不在本机";
+  pathButton.disabled = !path;
+  pathButton.title = "在文件管理器中打开所在文件夹";
+  pathButton.onclick = guard(async () => {
+    await api("/reveal/" + f.hash, {});
+    message("已打开所在文件夹：" + path);
+  });
+  const copyPath = $("#copy-path");
+  copyPath.disabled = !path;
+  copyPath.textContent = "复制路径";
+  copyPath.onclick = guard(async () => {
+    await copyText(path);
+    copyPath.textContent = "已复制路径";
+    setTimeout(() => (copyPath.textContent = "复制路径"), 1500);
+  });
   $("#favorite").textContent = f.favorite ? "取消收藏" : "收藏";
   $("#download").href = base + "/asset/" + f.hash + "?download=1";
   const media = el(f.kind === "video" ? "video" : "img");

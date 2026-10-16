@@ -328,6 +328,35 @@ dialog::backdrop {
   max-height: 65vh;
   object-fit: contain;
 }
+.viewer-path {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+.path-label {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.path-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--color-accent);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.path-link:hover {
+  text-decoration: underline;
+}
+.path-link:disabled {
+  color: var(--color-muted);
+  cursor: wait;
+}
 #more {
   margin-top: var(--space-lg);
 }

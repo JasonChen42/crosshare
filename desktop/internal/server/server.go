@@ -34,6 +34,11 @@ const (
 	maxAudioReadDuration = 2 * time.Minute
 )
 
+// desktopImportDeviceID marks imports made from the local browser UI. They must
+// not trigger "new photos saved" desktop notifications, because the user is
+// already looking at the photo library.
+const desktopImportDeviceID = "desktop"
+
 // Server is the HTTP server that handles API requests from phones.
 type Server struct {
 	cfg           *config.Config
@@ -46,6 +51,8 @@ type Server struct {
 	libraryMu     sync.Mutex
 	speechMu      sync.Mutex
 	speechState   speechRuntimeState
+	uploads       *uploadNotifier
+	reveal        func(name string, args ...string) error
 }
 
 // New creates a new HTTP server.
@@ -77,6 +84,8 @@ func New(cfg *config.Config, db *storage.DB, syncMgr *csync.Manager) *Server {
 		syncMgr:       syncMgr,
 		audioReceiver: audioReceiver,
 		pairLimiter:   newPairLimiter(),
+		uploads:       newUploadNotifier(cfg.HTTPPort, nil),
+		reveal:        execReveal,
 	}
 
 	mux := http.NewServeMux()
@@ -175,7 +184,19 @@ func (s *Server) Serve(listener net.Listener) error {
 
 // Stop gracefully stops the HTTP server.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.uploads != nil {
+		s.uploads.stop()
+	}
 	return s.server.Shutdown(ctx)
+}
+
+// notifySavedUpload queues a desktop notification for a newly stored upload,
+// unless it was imported from the local browser UI.
+func (s *Server) notifySavedUpload(device *config.PairedDevice) {
+	if s.uploads == nil || device == nil || device.DeviceID == desktopImportDeviceID {
+		return
+	}
+	s.uploads.saved()
 }
 
 // authMiddleware wraps a handler with token authentication.
@@ -546,6 +567,7 @@ func (s *Server) handleMediaUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[server] received %s from %s (%d bytes)", originalName, device.DeviceName, copied)
+	s.notifySavedUpload(device)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"hash":     hash,
 		"uploaded": true,
