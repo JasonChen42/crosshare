@@ -21,6 +21,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.crosshare.service.AudioStreamService
 import com.crosshare.service.SyncService
+import com.crosshare.service.shouldAutoStartSync
 import com.crosshare.ui.screens.PhotoHomeScreen
 import com.crosshare.ui.screens.PairScreen
 import com.crosshare.ui.screens.SettingsScreen
@@ -37,6 +38,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val KEY_SYNC_STOPPED = "sync_stopped"
     }
 
     private data class PairingResult(
@@ -137,6 +139,15 @@ class MainActivity : ComponentActivity() {
                 val isPaired = pairedToken != null
                 val scope = rememberCoroutineScope()
 
+                // A reinstall or process death leaves the sync service stopped,
+                // which would grey out every upload button. Restart it here
+                // unless the user paused transfers on purpose.
+                LaunchedEffect(Unit) {
+                    if (shouldAutoStartSync(isPaired, syncStoppedByUser())) {
+                        checkPermissionsAndStart()
+                    }
+                }
+
                 NavHost(navController = navController, startDestination = "home") {
                     composable("home") {
                         PhotoHomeScreen(
@@ -148,7 +159,16 @@ class MainActivity : ComponentActivity() {
                             onStartAudio = { checkAudioPermissionAndStart() },
                             onStopAudio = { stopAudioService() },
                             onRescan = { syncService?.rescan() },
-                            onUpload = { hashes -> syncService?.uploadSelected(hashes) },
+                            onUpload = { hashes ->
+                                val service = syncService
+                                if (service != null) service.uploadSelected(hashes)
+                                else {
+                                    // No bound service yet: persist the queue and
+                                    // start the service, which drains it at once.
+                                    SyncService.enqueue(this@MainActivity, hashes)
+                                    checkPermissionsAndStart()
+                                }
+                            },
                             onNavigateToSettings = { navController.navigate("settings") }
                         )
                     }
@@ -263,6 +283,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startSyncService() {
+        serverPrefs().edit().putBoolean(KEY_SYNC_STOPPED, false).apply()
         SyncService.start(this)
         Intent(this, SyncService::class.java).also { intent ->
             bindService(intent, syncServiceConnection, Context.BIND_AUTO_CREATE)
@@ -276,7 +297,13 @@ class MainActivity : ComponentActivity() {
         }
         SyncService.stop(this)
         syncService = null
+        serverPrefs().edit().putBoolean(KEY_SYNC_STOPPED, true).apply()
     }
+
+    private fun serverPrefs() = getSharedPreferences("crosshare_server", Context.MODE_PRIVATE)
+
+    /** True when the user paused transfers from the transfers tab. */
+    private fun syncStoppedByUser() = serverPrefs().getBoolean(KEY_SYNC_STOPPED, false)
 
     private fun checkAudioPermissionAndStart() {
         val permissions = mutableListOf<String>()

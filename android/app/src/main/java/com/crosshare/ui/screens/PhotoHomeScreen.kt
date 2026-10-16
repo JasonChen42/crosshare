@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -303,6 +304,15 @@ fun PhotoHomeScreen(
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
                 }
+                serviceState.savedNotice?.let {
+                    SelectionContainer {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                }
             }
             when (tab) {
                 0 -> {
@@ -369,11 +379,11 @@ fun PhotoHomeScreen(
                                 TextButton(
                                     enabled =
                                         pairedComputerName != null &&
-                                            serviceState.isRunning &&
                                             selected.any { localByHash.containsKey(it) },
                                     onClick = {
                                         val hashes =
                                             selected.filter { localByHash.containsKey(it) }.toSet()
+                                        if (!serviceState.isRunning) onStartService()
                                         onUpload(hashes)
                                         notice = "${hashes.size} 项已加入上传队列"
                                         selected = emptySet()
@@ -725,13 +735,16 @@ fun PhotoHomeScreen(
                         if (photo.local != null)
                             Button(
                                 onClick = {
+                                    if (!serviceState.isRunning) onStartService()
                                     onUpload(setOf(photo.hash))
-                                    notice = "已加入上传队列"
+                                    notice =
+                                        if (serviceState.isRunning) "已加入上传队列"
+                                        else "已开启传输并加入上传队列"
                                     preview = null
                                 },
-                                enabled = pairedComputerName != null && serviceState.isRunning,
+                                enabled = pairedComputerName != null,
                             ) {
-                                Text("上传电脑")
+                                Text(if (serviceState.isRunning) "上传电脑" else "开启传输并上传")
                             }
                         if (photo.remote != null)
                             Button(

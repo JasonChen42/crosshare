@@ -43,6 +43,20 @@ class SyncService : Service() {
             val intent = Intent(context, SyncService::class.java)
             context.stopService(intent)
         }
+
+        /**
+         * Persists hashes for upload without a bound service instance. The
+         * receiver loop drains this queue on the next service start, so an
+         * upload queued before the service exists is not lost.
+         */
+        fun enqueue(context: Context, hashes: Set<String>) {
+            val prefs =
+                context.getSharedPreferences("crosshare_transfers", Context.MODE_PRIVATE)
+            val pending = prefs.getStringSet("uploads", emptySet()).orEmpty().toMutableSet()
+            if (pending.addAll(hashes)) {
+                prefs.edit().putStringSet("uploads", pending).commit()
+            }
+        }
     }
 
     // Service state
@@ -57,6 +71,7 @@ class SyncService : Service() {
         val currentFile: String? = null,
         val lastError: String? = null,
         val pendingUploads: Int = 0,
+        val savedNotice: String? = null,
     )
 
     private val _state = MutableStateFlow(ServiceState())
@@ -184,10 +199,13 @@ class SyncService : Service() {
             return START_STICKY
         }
 
-        // Scan and index media in background
-        rescan()
+        // Restarting an already running service must not re-scan the media
+        // store; only the first start after a process death does the scan.
+        if (!_state.value.isRunning) {
+            rescan()
 
-        _state.value = _state.value.copy(isRunning = true)
+            _state.value = _state.value.copy(isRunning = true)
+        }
 
         return START_STICKY
     }
@@ -258,6 +276,7 @@ class SyncService : Service() {
                 syncTotal = 0,
                 currentFile = null,
                 lastError = null,
+                savedNotice = null,
             )
         updateNotification("正在准备同步...")
 
@@ -306,6 +325,9 @@ class SyncService : Service() {
                     syncDone = toUpload.size,
                     syncTotal = toUpload.size,
                     currentFile = null,
+                    savedNotice =
+                        if (toUpload.isEmpty()) null
+                        else SyncMessages.savedNotice(toUpload.size, port),
                 )
             updateNotification("同步完成 · 已同步 $synced/$total")
         } catch (e: Exception) {
